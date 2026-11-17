@@ -1026,11 +1026,28 @@ let MD = (function () {
     const fin = fn => { if (!done) { done = true; clearInterval(iv); fn(); } };
     s.src = 'coolprop.js';
     s.onerror = () => fin(() => F.noCoolProp('coolprop.js was not found next to index.html.'));
+    const errs = [];
+    window.addEventListener('error', e => { if (errs.length < 2) errs.push(String(e.message || e).slice(0, 80)); });
+    const diagnose = async () => {
+      const bits = [];
+      const M = window.Module;
+      bits.push('Module ' + (M ? 'exists, ' + Object.keys(M).filter(k => /props|cwrap|HEAP/i.test(k)).slice(0, 4).join('/') : 'missing'));
+      for (const n of ['coolprop.js', 'coolprop.wasm']) {
+        try {
+          const r = await fetch(n + '?x=' + Date.now(), { cache: 'no-store' });
+          const b = await r.arrayBuffer();
+          const head = n.endsWith('.wasm') ? Array.from(new Uint8Array(b.slice(0, 4))).join(',') : new TextDecoder().decode(b.slice(0, 20)).replace(/\s+/g, ' ');
+          bits.push(n + ': ' + r.status + ', ' + Math.round(b.byteLength / 1024) + ' KB, starts ' + head);
+        } catch (e) { bits.push(n + ': ' + (e && e.message)); }
+      }
+      if (errs.length) bits.push('error: ' + errs.join('; '));
+      F.noCoolProp('CoolProp did not finish loading. ' + bits.join(' | '));
+    };
     const t0 = Date.now();
     const iv = setInterval(() => {
       const M = window.Module;
       if (M && typeof M.PropsSI === 'function') fin(() => F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f)));
-      else if (Date.now() - t0 > 30000) fin(() => F.noCoolProp('CoolProp did not finish loading (is coolprop.wasm next to index.html?).'));
+      else if (Date.now() - t0 > 20000) fin(() => diagnose());
     }, 150);
     document.head.appendChild(s);
   };
