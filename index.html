@@ -1,0 +1,1493 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#132028">
+<style>:root{color-scheme:light}body{margin:0;font-size:14px}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>Mollier Desk</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: readings form on the left, results strip and chart on the right; on a phone it stacks as readings, results, chart, tables.
+   Colour roles: magenta = your cycle, orange = superheat, violet = subcooling, blue/teal/ochre = chart property lines. */
+:root {
+  --bg: #E9EEF1; --panel: #F6F8F9; --chart-bg: #FCFDFD;
+  --ink: #132028; --ink-2: #455662; --ink-3: #75848F;
+  --line: #CFD7DC; --grid: #D9E0E4; --grid-2: #EAEFF1;
+  --c-iso: #2F6FA8; --c-ent: #148A7B; --c-vol: #94700F; --c-dome: #132028; --c-fill: rgba(47, 111, 168, 0.08);
+  --accent: #C0205A; --accent-ink: #FFFFFF; --c-sh: #C45A00; --c-sc: #6B4BC8; --ok: #1F7A4D; --warn: #B3261E; --focus: #2F6FA8;
+  --f-head: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0B1216; --panel: #121B21; --chart-bg: #0E161B;
+    --ink: #E3EBEF; --ink-2: #A3B3BE; --ink-3: #71838F;
+    --line: #22333D; --grid: #1C2A32; --grid-2: #151F26;
+    --c-iso: #6AAEE6; --c-ent: #45C4B3; --c-vol: #D1B24F; --c-dome: #E3EBEF; --c-fill: rgba(106, 174, 230, 0.09);
+    --accent: #FF6F9E; --accent-ink: #1B0610; --c-sh: #FFA24D; --c-sc: #A99BFF; --ok: #6FD39B; --warn: #FF8A80; --focus: #6AAEE6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0B1216; --panel: #121B21; --chart-bg: #0E161B;
+  --ink: #E3EBEF; --ink-2: #A3B3BE; --ink-3: #71838F;
+  --line: #22333D; --grid: #1C2A32; --grid-2: #151F26;
+  --c-iso: #6AAEE6; --c-ent: #45C4B3; --c-vol: #D1B24F; --c-dome: #E3EBEF; --c-fill: rgba(106, 174, 230, 0.09);
+  --accent: #FF6F9E; --accent-ink: #1B0610; --c-sh: #FFA24D; --c-sc: #A99BFF; --ok: #6FD39B; --warn: #FF8A80; --focus: #6AAEE6;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--f-body); padding-block: 16px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); -webkit-text-size-adjust: 100%; }
+.wrap { max-width: 1500px; margin: 0 auto; display: grid; gap: 14px; }
+h1, h2 { font-family: var(--f-head); margin: 0; font-weight: 600; letter-spacing: 0.01em; }
+h1 { font-size: 28px; line-height: 1; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ink-2); }
+.top p { margin: 4px 0 0; color: var(--ink-2); max-width: 60ch; }
+select, input[type="number"], input[type="text"], textarea { font: 500 16px var(--f-mono); color: var(--ink); background: var(--chart-bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px 9px; width: 100%; min-width: 0; min-height: 40px; }
+select { font-family: var(--f-body); }
+select:focus-visible, input:focus-visible, button:focus-visible, .chip input:focus-visible + span, tr[data-k]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.grid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); grid-template-areas: "controls" "kpi" "chart" "tables"; }
+@media (min-width: 1000px) {
+  .grid { grid-template-columns: 340px minmax(0, 1fr); grid-template-areas: "controls kpi" "controls chart" "controls tables"; align-items: start; }
+}
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+
+.controls { grid-area: controls; padding: 14px; display: grid; gap: 16px; align-content: start; }
+.grp { display: grid; gap: 10px; }
+.meta { margin: 0; font-size: 12px; color: var(--ink-2); }
+.warnnote { margin: 0; font-size: 12px; color: var(--ink-2); border-left: 3px solid var(--c-vol); padding-left: 8px; }
+.pt { display: grid; gap: 6px; }
+.pt > b { font: 600 13px var(--f-body); }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.f { display: grid; gap: 3px; min-width: 0; }
+.f > span { font-size: 12px; color: var(--ink-2); }
+.inp { position: relative; display: block; }
+.inp input { padding-right: 44px; text-align: right; }
+.inp em { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); font: 400 11px var(--f-mono); color: var(--ink-3); font-style: normal; pointer-events: none; }
+.example { margin: 0; font-size: 12.5px; color: var(--ink-2); border: 1px dashed var(--line); border-radius: 4px; padding: 7px 9px; }
+.btn { font: 500 13px var(--f-body); color: var(--ink); background: var(--chart-bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; min-height: 38px; cursor: pointer; }
+.btn:hover { border-color: var(--ink-3); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.06); }
+
+.kpis { grid-area: kpi; display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 2px; align-content: start; min-width: 0; }
+.kpi-l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-2); }
+.kpi-v { font: 600 22px/1.15 var(--f-mono); font-variant-numeric: tabular-nums; }
+.kpi-v small { font: 500 12px var(--f-mono); color: var(--ink-2); margin-left: 4px; }
+.kpi-sub { font-size: 12px; color: var(--ink-2); }
+.kpi-main { grid-column: span 2; gap: 3px; border-width: 2px; }
+.kpi-main .kpi-v { font-size: 38px; }
+.k-sh { border-color: var(--c-sh); } .k-sh .kpi-v { color: var(--c-sh); }
+.k-sc { border-color: var(--c-sc); } .k-sc .kpi-v { color: var(--c-sc); }
+.k-cop { border-color: var(--accent); } .k-cop .kpi-v { color: var(--accent); }
+@media (min-width: 760px) { .kpi-main { grid-column: span 2; } }
+.msg { grid-column: 1 / -1; margin: 0; padding: 9px 12px; border: 1px solid var(--warn); border-radius: 6px; color: var(--warn); background: var(--panel); font-weight: 500; }
+
+.chartcard { grid-area: chart; padding: 10px; display: grid; gap: 10px; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { position: relative; }
+.chip input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; width: 100%; height: 100%; }
+.chip span { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; color: var(--ink-2); background: var(--chart-bg); }
+.chip span::before { content: ""; width: 14px; height: 0; border-top: 2px solid var(--sw, var(--ink-3)); }
+.chip input:checked + span { color: var(--ink); border-color: var(--sw, var(--ink-3)); }
+.chip input:not(:checked) + span { opacity: 0.55; }
+.views { display: flex; gap: 6px; }
+.views .btn { padding: 5px 11px; min-height: 32px; font-size: 12px; }
+.cvwrap { position: relative; height: clamp(340px, 56vh, 700px); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--chart-bg); }
+#cv { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+.ro { min-height: 150px; padding: 9px 11px; background: var(--chart-bg); border: 1px solid var(--line); border-radius: 6px; font: 400 12px var(--f-body); color: var(--ink); display: grid; gap: 7px; align-content: start; }
+.ro.snap { border: 2px solid var(--accent); padding: 8px 10px; }
+.ro-h { display: flex; align-items: center; gap: 8px; justify-content: space-between; font-weight: 600; font-size: 14px; }
+.ro-h .ttl { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ro-h small { font: 400 12px var(--f-body); color: var(--ink-2); }
+.badge { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font: 700 11px var(--f-mono); flex: none; }
+.cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px 10px; }
+.cells > div { display: grid; gap: 0; min-width: 0; }
+.cells span { font-size: 11px; color: var(--ink-3); }
+.cells b { font: 500 13px var(--f-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cells b small { font: 400 11px var(--f-mono); color: var(--ink-2); }
+.cells .em b { color: var(--accent); font-weight: 700; }
+.ro .x { font: 500 18px/1 var(--f-body); background: none; border: 0; color: var(--ink-2); cursor: pointer; padding: 2px 8px; min-width: 34px; min-height: 30px; }
+.ro-hint { margin: 0; color: var(--ink-2); font-size: 13px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.legend button { display: inline-flex; align-items: center; gap: 6px; font: 500 12px var(--f-body); color: var(--ink); background: var(--chart-bg); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px 4px 5px; min-height: 32px; cursor: pointer; }
+.legend button[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.legend .key { font-size: 12px; color: var(--ink-2); display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; }
+.legend .key i { display: inline-block; width: 16px; height: 4px; border-radius: 2px; }
+.note { margin: 0; font-size: 12px; color: var(--ink-2); }
+
+.tables { grid-area: tables; display: grid; gap: 14px; min-width: 0; }
+.tcard { padding: 12px; display: grid; gap: 10px; min-width: 0; }
+.head2 { display: flex; flex-wrap: wrap; gap: 8px 14px; justify-content: space-between; align-items: center; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font: 400 12.5px var(--f-mono); font-variant-numeric: tabular-nums; min-width: 560px; }
+th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+thead th { font: 600 11px var(--f-body); text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); }
+tbody th { text-align: left; font-weight: 400; font-family: var(--f-body); font-size: 13px; }
+tbody th .badge { margin-right: 6px; vertical-align: middle; }
+td:last-child, thead th:last-child { text-align: left; }
+tr[data-k] { cursor: pointer; }
+tr[data-k].on { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.empty { text-align: center; color: var(--ink-2); }
+details { font-size: 12.5px; color: var(--ink-2); }
+details summary { cursor: pointer; color: var(--ink); font-weight: 500; }
+details p { margin: 8px 0 0; max-width: 78ch; }
+@media (min-width: 760px) { .ro { min-height: 96px; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <h1>Mollier Desk</h1>
+    <p>Type in the gauge and probe readings from your system. You get superheat, subcooling and COP, and the cycle plotted on a pressure&ndash;enthalpy chart.</p>
+  </header>
+
+  <div class="grid">
+    <aside class="card controls" aria-label="Readings">
+      <div class="grp">
+        <h2>Refrigerant</h2>
+        <select id="fluidSel" aria-label="Refrigerant"></select>
+        <p class="meta" id="fluidMeta"></p>
+        <p class="warnnote" id="fluidWarn" hidden></p>
+      </div>
+
+      <div class="grp">
+        <h2>Your readings</h2>
+        <label class="f" for="puSel"><span>Pressure gauge unit</span>
+          <select id="puSel">
+            <option value="barg">bar g (gauge)</option><option value="bara">bar a (absolute)</option><option value="psig">psi g (gauge)</option><option value="psia">psi a (absolute)</option><option value="kpag">kPa g (gauge)</option><option value="kpaa">kPa a (absolute)</option>
+          </select>
+        </label>
+        <div class="pt">
+          <b>Suction (compressor inlet)</b>
+          <div class="pair">
+            <label class="f" for="inpPs"><span>Pressure</span><span class="inp"><input id="inpPs" type="number" step="any"><em class="pu">bar g</em></span></label>
+            <label class="f" for="inpTs"><span>Temperature</span><span class="inp"><input id="inpTs" type="number" step="any"><em>&deg;C</em></span></label>
+          </div>
+        </div>
+        <div class="pt">
+          <b>Discharge (compressor outlet)</b>
+          <div class="pair">
+            <label class="f" for="inpPd"><span>Pressure</span><span class="inp"><input id="inpPd" type="number" step="any"><em class="pu">bar g</em></span></label>
+            <label class="f" for="inpTd"><span>Temperature</span><span class="inp"><input id="inpTd" type="number" step="any"><em>&deg;C</em></span></label>
+          </div>
+        </div>
+        <div class="pt">
+          <b>Liquid line (condenser outlet)</b>
+          <div class="pair">
+            <label class="f" for="inpT3"><span>Temperature</span><span class="inp"><input id="inpT3" type="number" step="any"><em>&deg;C</em></span></label>
+          </div>
+        </div>
+        <p class="example" id="exNote">Example readings for this fluid are shown. Type your own over them.</p>
+        <button type="button" class="btn" id="btnExample">Use example readings</button>
+        <p class="meta">Gauge pressures add 1.01325 bar of atmosphere. The liquid line is assumed to be at discharge pressure, and the expansion valve is taken as constant enthalpy.</p>
+      </div>
+
+      <div class="grp" id="pdfGrp" hidden>
+        <h2>PDF report</h2>
+        <label class="f" for="inpSite"><span>Site or job</span><input id="inpSite" type="text" autocomplete="off"></label>
+        <label class="f" for="inpEng"><span>Engineer</span><input id="inpEng" type="text" autocomplete="off"></label>
+        <label class="f" for="inpNotes"><span>Notes for the report</span><textarea id="inpNotes" rows="3" style="font: 400 14px var(--f-body); resize: vertical"></textarea></label>
+        <button type="button" class="btn primary" id="btnPdf">Create PDF report</button>
+        <p class="meta" id="pdfMsg" role="status"></p>
+      </div>
+
+      <div class="grp">
+        <h2>Reference state</h2>
+        <select id="refSel" aria-label="Reference state">
+          <option value="IIR">IIR (h 200, s 1.0 at 0 &deg;C liquid)</option>
+          <option value="ASHRAE">ASHRAE (h 0, s 0 at &minus;40 &deg;C liquid)</option>
+        </select>
+      </div>
+    </aside>
+
+    <section class="kpis" aria-live="polite">
+      <p class="msg" id="msg" role="status" hidden></p>
+      <div id="kpi" style="display: contents"></div>
+    </section>
+
+    <section class="card chartcard" aria-label="Pressure enthalpy chart">
+      <div class="bar">
+        <div class="views">
+          <button type="button" class="btn" id="btnFit">Zoom to cycle</button>
+          <button type="button" class="btn" id="btnFull">Full chart</button>
+        </div>
+        <div class="chips" role="group" aria-label="Chart layers">
+          <label class="chip" style="--sw: var(--c-iso)"><input type="checkbox" id="lyIso"><span>Temp &deg;C</span></label>
+          <label class="chip" style="--sw: var(--c-ent)"><input type="checkbox" id="lyEnt"><span>Entropy</span></label>
+          <label class="chip" style="--sw: var(--c-vol)"><input type="checkbox" id="lyVol"><span>Volume</span></label>
+          <label class="chip" style="--sw: var(--ink-3)"><input type="checkbox" id="lyQual"><span>Quality</span></label>
+        </div>
+      </div>
+      <div class="ro" id="ro" aria-live="polite"></div>
+      <div class="cvwrap" id="cvWrap">
+        <canvas id="cv" role="img" aria-label="Pressure enthalpy diagram with your four cycle points. The values are listed in the table below the chart."></canvas>
+      </div>
+      <div class="legend" id="legend"></div>
+      <p class="note">Drag to pan, pinch or scroll to zoom, double-tap to zoom to the cycle.</p>
+    </section>
+
+    <div class="tables">
+      <section class="card tcard">
+        <div class="head2">
+          <h2>Cycle points</h2>
+          <span class="views"><button type="button" class="btn" id="btnCopy">Copy summary</button><button type="button" class="btn primary" id="btnPdf2" hidden>PDF report</button></span>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Point</th><th id="thP">p</th><th>T &deg;C</th><th>h kJ/kg</th><th>s kJ/kg&middot;K</th><th>v m&sup3;/kg</th><th>State</th></tr></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+        <p class="note">Tap a row to highlight that point on the chart.</p>
+      </section>
+
+      <details class="card tcard">
+        <summary>How the numbers are calculated</summary>
+        <p>Superheat is suction temperature minus the saturation temperature at suction pressure. Subcooling is the saturation temperature at discharge pressure minus liquid line temperature. Enthalpy and entropy come from the pressure and temperature you enter, and the point after the expansion valve is found at the same enthalpy as the liquid line, down at suction pressure.</p>
+        <p>COP (cooling) is the suction enthalpy minus the liquid line enthalpy, divided by the discharge enthalpy minus the suction enthalpy. Heating COP is the heat rejected divided by the same work. Isentropic efficiency compares the ideal discharge enthalpy at the same entropy with the real one. Heat lost from the compressor shell and the pipes is not included, and readings at a transcritical gas cooler give no subcooling.</p>
+        <p>Properties come from the Peng&ndash;Robinson equation of state with a two-parameter alpha function fitted to vapour pressure, a linear ideal-gas heat capacity and a volume correction. This is not a reference-grade fluid model: expect vapour pressures within about 1&ndash;2 %, latent heat within a few percent, and enthalpy differences a little off. Blends are drawn as single fluids. Their temperature glide is applied only when working out superheat (from the dew point) and subcooling (from the bubble point), using a typical glide for each blend. Blend properties are estimated from their components, so treat blend pressures as good to about 5 %. For certified figures use REFPROP or CoolProp.</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Thermodynamic engine: Peng-Robinson EOS (Mathias-Copeman alpha fitted to two
+   vapour-pressure points per fluid), Peneloux volume shift, linear ideal-gas cp.
+   Units: T [K], P [kPa], h [kJ/kg], s [kJ/kg/K], v [m3/kg]. */
+const MD = (function () {
+  const RU = 8.314462618, SQ2 = Math.SQRT2, P0 = 100;
+
+  const DEFS = [
+    { id: 'R134a', name: 'R134a', note: 'HFC, single component', M: 102.032, Tc: 374.21, Pc: 4059.3, w: 0.3268, cp: [86.5, 104.8], cal: [[253.15, 132.7], [313.15, 1016.6]], tmin: 223.15, def: { Te: -10, SH: 10, Tcd: 40, SC: 5 } },
+    { id: 'R1234yf', name: 'R1234yf', note: 'HFO, single component', M: 114.04, Tc: 367.85, Pc: 3384.4, w: 0.276, cp: [99.0, 117.5], cal: [[273.15, 315.0], [313.15, 1017.0]], tmin: 233.15, def: { Te: 5, SH: 8, Tcd: 45, SC: 5 }, est: true },
+    { id: 'R1234ze', name: 'R1234ze(E)', note: 'HFO, single component', M: 114.04, Tc: 382.51, Pc: 3636.3, w: 0.313, cp: [98.0, 116.0], cal: [[273.15, 216.0], [313.15, 772.0]], tmin: 233.15, def: { Te: 5, SH: 8, Tcd: 45, SC: 5 }, est: true },
+    { id: 'R32', name: 'R32', note: 'HFC, single component', M: 52.024, Tc: 351.255, Pc: 5782, w: 0.2769, cp: [42.9, 50.8], cal: [[273.15, 813.0], [313.15, 2478.0]], tmin: 223.15, def: { Te: 5, SH: 5, Tcd: 45, SC: 5 } },
+    { id: 'R410A', name: 'R410A', note: 'Blend, treated as pseudo-pure (glide ignored)', M: 72.585, Tc: 344.5, Pc: 4901.2, w: 0.296, cp: [55.0, 65.5], cal: [[273.15, 798.0], [323.15, 3060.0]], tmin: 223.15, def: { Te: 5, SH: 5, Tcd: 45, SC: 5 } },
+    { id: 'R404A', name: 'R404A', note: 'Blend, treated as pseudo-pure (glide ignored)', M: 97.6, Tc: 345.27, Pc: 3735, w: 0.293, cp: [75.1, 91.2], cal: [[253.15, 295.0], [313.15, 1830.0]], tmin: 223.15, def: { Te: -30, SH: 8, Tcd: 40, SC: 3 } },
+    { id: 'R22', name: 'R22', note: 'HCFC, single component', M: 86.47, Tc: 369.295, Pc: 4990, w: 0.2208, cp: [56.2, 65.5], cal: [[273.15, 498.1], [313.15, 1533.6]], tmin: 223.15, def: { Te: -10, SH: 10, Tcd: 40, SC: 5 } },
+    { id: 'R290', name: 'R290 (propane)', note: 'Hydrocarbon, single component', M: 44.096, Tc: 369.89, Pc: 4251.2, w: 0.1521, cp: [73.6, 94.1], cal: [[273.15, 474.4], [313.15, 1369.0]], tmin: 223.15, def: { Te: -10, SH: 8, Tcd: 40, SC: 4 } },
+    { id: 'R600a', name: 'R600a (isobutane)', note: 'Hydrocarbon, single component', M: 58.122, Tc: 407.81, Pc: 3629, w: 0.1835, cp: [96.6, 122.8], cal: [[273.15, 156.5], [313.15, 531.0]], tmin: 233.15, def: { Te: -25, SH: 10, Tcd: 45, SC: 3 } },
+    { id: 'R717', name: 'R717 (ammonia)', note: 'Natural, single component', M: 17.031, Tc: 405.4, Pc: 11333, w: 0.2526, cp: [35.7, 38.75], cal: [[273.15, 429.4], [313.15, 1555.0]], tmin: 223.15, def: { Te: -10, SH: 5, Tcd: 35, SC: 2 } },
+    { id: 'R744', name: 'R744 (CO₂)', note: 'Natural, single component, transcritical capable', M: 44.01, Tc: 304.128, Pc: 7377.3, w: 0.22394, cp: [37.22, 41.34], cal: [[253.15, 1969.6], [293.15, 5729.0]], tmin: 217.0, def: { Te: -10, SH: 10, Tcd: 25, SC: 3, mode: 'gc', Pgc: 90, Tgc: 35 } }
+,
+    {id: "R125", name: "R125", note: "HFC, single component", M: 120.02, Tc: 339.17, Pc: 3617.7, w: 0.3052, cp: [94.5, 110.5], cal: [[225.06, 101.325], [237.42, 179.2]], tmin: 200.15, def: {Te: -20, SH: 8, Tcd: 35, SC: 4}},
+    {id: "R143a", name: "R143a", note: "HFC, single component", M: 84.04, Tc: 345.86, Pc: 3761, w: 0.2615, cp: [77.0, 92.5], cal: [[225.91, 101.325], [242.1, 206.0]], tmin: 200.15, def: {Te: -30, SH: 8, Tcd: 40, SC: 4}},
+    {id: "R152a", name: "R152a", note: "HFC, single component", M: 66.05, Tc: 386.41, Pc: 4516.8, w: 0.2752, cp: [58.5, 71.5], cal: [[249.13, 101.325], [270.49, 239.7]], tmin: 223.15, def: {Te: -10, SH: 8, Tcd: 40, SC: 4}},
+    {id: "R23", name: "R23", note: "HFC, single component, low temperature", M: 70.01, Tc: 299.29, Pc: 4832, w: 0.263, cp: [51.0, 58.9], cal: [[191.1, 101.325], [209.5, 263.7]], tmin: 170.15, def: {Te: -80, SH: 10, Tcd: -40, SC: 3}},
+    {id: "R245fa", name: "R245fa", note: "HFC, single component", M: 134.05, Tc: 427.01, Pc: 3651, w: 0.3724, cp: [109.0, 128.0], cal: [[288.29, 101.325], [298.91, 154.9]], tmin: 258.15, def: {Te: 20, SH: 5, Tcd: 70, SC: 3}, est: true},
+    {id: "R1233zd", name: "R1233zd(E)", note: "HFO, single component", M: 130.5, Tc: 439.6, Pc: 3624, w: 0.305, cp: [104.0, 122.0], cal: [[291.4, 101.325], [307.72, 179.6]], tmin: 258.15, def: {Te: 10, SH: 5, Tcd: 55, SC: 3}, est: true},
+    {id: "R600", name: "R600 (butane)", note: "Hydrocarbon, single component", M: 58.122, Tc: 425.13, Pc: 3796, w: 0.2002, cp: [97.5, 124.5], cal: [[272.66, 101.325], [297.59, 239.4]], tmin: 235.15, def: {Te: 5, SH: 5, Tcd: 50, SC: 3}},
+    {id: "R1270", name: "R1270 (propylene)", note: "Hydrocarbon, single component", M: 42.081, Tc: 364.21, Pc: 4555, w: 0.1398, cp: [64.0, 82.0], cal: [[225.46, 101.325], [254.95, 330.1]], tmin: 200.15, def: {Te: -10, SH: 8, Tcd: 40, SC: 4}},
+    {id: "R170", name: "R170 (ethane)", note: "Hydrocarbon, single component, low temperature", M: 30.069, Tc: 305.32, Pc: 4872, w: 0.0995, cp: [52.7, 65.5], cal: [[184.55, 101.325], [213.72, 387.4]], tmin: 160.15, def: {Te: -90, SH: 5, Tcd: -20, SC: 3}},
+    {id: "R407C", name: "R407C", note: "Blend R32 23 %, R125 25 %, R134a 52 %; glide about 5.5 K", M: 86.203, Tc: 359.17, Pc: 4636.5, w: 0.3039, cp: [71.3, 85.2], cal: [[233.25, 101.325], [251.42, 230.3]], tmin: 203.25, def: {Te: 5, SH: 5, Tcd: 45, SC: 5}, est: true, glide: 5.5, warn: "Blend properties are estimated from the pure components, so enthalpy and pressure are less certain than for a single fluid."},
+    {id: "R448A", name: "R448A", note: "Blend R32 26 %, R125 26 %, R1234yf 20 %, R134a 21 %, R1234ze 7 %; glide about 5.5 K", M: 86.283, Tc: 357.24, Pc: 4595.1, w: 0.2928, cp: [71.7, 85.1], cal: [[230.3, 101.325], [250.07, 234.1]], tmin: 200.3, def: {Te: -30, SH: 8, Tcd: 40, SC: 3}, est: true, glide: 5.5, warn: "Blend properties are estimated from the pure components, so enthalpy and pressure are less certain than for a single fluid."},
+    {id: "R449A", name: "R449A", note: "Blend R32 24.3 %, R125 24.7 %, R1234yf 25.3 %, R134a 25.7 %; glide about 4.5 K", M: 87.212, Tc: 357.34, Pc: 4551.2, w: 0.2928, cp: [72.6, 86.3], cal: [[230.1, 101.325], [250.14, 231.9]], tmin: 200.1, def: {Te: -30, SH: 8, Tcd: 40, SC: 3}, est: true, glide: 4.5, warn: "Blend properties are estimated from the pure components, so enthalpy and pressure are less certain than for a single fluid."},
+    {id: "R452A", name: "R452A", note: "Blend R32 11 %, R125 59 %, R1234yf 30 %; glide about 3 K", M: 103.51, Tc: 349.62, Pc: 4027.9, w: 0.2911, cp: [84.4, 99.3], cal: [[228.05, 101.325], [244.74, 206.1]], tmin: 198.05, def: {Te: -30, SH: 8, Tcd: 40, SC: 3}, est: true, glide: 3.0, warn: "Blend properties are estimated from the pure components, so enthalpy and pressure are less certain than for a single fluid."},
+    {id: "R454B", name: "R454B", note: "Blend R32 68.9 %, R1234yf 31.1 %; glide about 1.5 K", M: 62.613, Tc: 350.0, Pc: 5270.0, w: 0.2767, cp: [52.5, 62.2], cal: [[222.7, 101.325], [245.0, 278.7]], tmin: 192.7, def: {Te: 5, SH: 5, Tcd: 45, SC: 5}, est: true, glide: 1.5, warn: "Blend properties are estimated from the pure components, so enthalpy and pressure are less certain than for a single fluid."},
+    {id: "R507A", name: "R507A", note: "Blend R125 50 %, R143a 50 %; negligible glide", M: 98.858, Tc: 343.1, Pc: 3702.0, w: 0.2795, cp: [84.2, 99.9], cal: [[226.45, 101.325], [240.17, 194.5]], tmin: 196.45, def: {Te: -30, SH: 8, Tcd: 40, SC: 3}, est: true, warn: "Blend properties are estimated from the pure components, so enthalpy and pressure are less certain than for a single fluid."},
+    {id: "R513A", name: "R513A", note: "Blend R1234yf 56 %, R134a 44 %; negligible glide", M: 108.425, Tc: 370.82, Pc: 3700.0, w: 0.2998, cp: [93.2, 111.6], cal: [[243.95, 101.325], [259.58, 185.5]], tmin: 213.95, def: {Te: 5, SH: 5, Tcd: 45, SC: 5}, est: true, warn: "Blend properties are estimated from the pure components, so enthalpy and pressure are less certain than for a single fluid."}
+  ];
+  const GRP = { R134a: 'HFC', R32: 'HFC', R125: 'HFC', R143a: 'HFC', R152a: 'HFC', R23: 'HFC', R245fa: 'HFC', R22: 'HFC', R1234yf: 'HFO', R1234ze: 'HFO', R1233zd: 'HFO',
+    R404A: 'Blends', R407C: 'Blends', R410A: 'Blends', R448A: 'Blends', R449A: 'Blends', R452A: 'Blends', R454B: 'Blends', R507A: 'Blends', R513A: 'Blends',
+    R290: 'Natural', R600a: 'Natural', R600: 'Natural', R1270: 'Natural', R170: 'Natural', R717: 'Natural', R744: 'Natural' };
+  DEFS.forEach(d => { d.grp = GRP[d.id] || 'Other'; });
+
+  /* ---------- cubic EOS core ---------- */
+  function eos(fl, T, P) {
+    const x = 1 - Math.sqrt(T / fl.Tc);
+    let f = 1 + fl.c1 * x, fp = fl.c1;
+    if (T < fl.Tc) { f += fl.c2 * x * x; fp += 2 * fl.c2 * x; }
+    const dx = -0.5 / Math.sqrt(T * fl.Tc);
+    const a = fl.ac * f * f, dadT = fl.ac * 2 * f * fp * dx;
+    const RT = fl.R * T;
+    return { a, dadT, A: a * P / (RT * RT), B: fl.b * P / RT };
+  }
+
+  function roots(A, B) {
+    const c2 = -(1 - B), c1 = A - 3 * B * B - 2 * B, c0 = -(A * B - B * B - B * B * B);
+    const p = c1 - c2 * c2 / 3, q = 2 * c2 * c2 * c2 / 27 - c2 * c1 / 3 + c0;
+    const D = q * q / 4 + p * p * p / 27;
+    let zs = [];
+    if (D > 0) {
+      const sD = Math.sqrt(D);
+      zs.push(Math.cbrt(-q / 2 + sD) + Math.cbrt(-q / 2 - sD) - c2 / 3);
+    } else {
+      const r = Math.sqrt(Math.max(-p * p * p / 27, 1e-300));
+      const phi = Math.acos(Math.max(-1, Math.min(1, -q / 2 / r)));
+      const m = 2 * Math.sqrt(-p / 3);
+      for (let k = 0; k < 3; k++) zs.push(m * Math.cos((phi + 2 * Math.PI * k) / 3) - c2 / 3);
+    }
+    zs = zs.map(z => {
+      for (let i = 0; i < 3; i++) {
+        const fz = ((z + c2) * z + c1) * z + c0, dz = (3 * z + 2 * c2) * z + c1;
+        if (dz !== 0 && isFinite(fz / dz)) z -= fz / dz;
+      }
+      return z;
+    }).filter(z => z > B + 1e-12).sort((a, b) => a - b);
+    if (!zs.length) zs = [Math.max(1, B * 1.5)];
+    return zs;
+  }
+
+  function props(fl, T, P, root) {
+    const e = eos(fl, T, P), zs = roots(e.A, e.B);
+    const Z = root === 'L' ? zs[0] : zs[zs.length - 1];
+    const RT = fl.R * T, B = e.B;
+    const L = Math.log((Z + (1 + SQ2) * B) / (Z + (1 - SQ2) * B));
+    const k = 1 / (2 * SQ2 * fl.b);
+    const hdep = RT * (Z - 1) + (T * e.dadT - e.a) * k * L;
+    const sdep = fl.R * Math.log(Z - B) + e.dadT * k * L;
+    return {
+      T, P, Z,
+      h: fl.k0 * T + 0.5 * fl.k1 * T * T + hdep + fl.hOff,
+      s: fl.k0 * Math.log(T) + fl.k1 * T - fl.R * Math.log(P / P0) + sdep + fl.sOff,
+      v: Z * RT / P - fl.cT
+    };
+  }
+
+  function phiBoth(fl, T, P) {
+    const e = eos(fl, T, P), zs = roots(e.A, e.B), A = e.A, B = e.B;
+    const lp = Z => Z - 1 - Math.log(Z - B) - A / (2 * SQ2 * B) * Math.log((Z + (1 + SQ2) * B) / (Z + (1 - SQ2) * B));
+    if (zs.length >= 2) {
+      const zl = zs[0], zv = zs[zs.length - 1];
+      return { n: 2, zl, zv, ll: lp(zl), lv: lp(zv), B };
+    }
+    return { n: 1, z: zs[0], B };
+  }
+
+  function satP(fl, T) {
+    if (T >= fl.Tc) return { P: fl.Pc, crit: true };
+    let lnP = Math.log(fl.Pc) + 5.373 * (1 + fl.w) * (1 - fl.Tc / T);
+    let last = null;
+    for (let i = 0; i < 300; i++) {
+      const q = phiBoth(fl, T, Math.exp(lnP));
+      if (q.n === 1) { lnP += (q.z / q.B < 3 ? -0.2 : 0.2); continue; }
+      last = q;
+      const f = q.ll - q.lv, fp = q.zl - q.zv;
+      let d = Math.abs(fp) > 1e-9 ? -f / fp : -f;
+      if (d > 0.5) d = 0.5; else if (d < -0.5) d = -0.5;
+      lnP += d;
+      if (Math.abs(d) < 1e-12) break;
+    }
+    return { P: Math.exp(lnP), zl: last && last.zl, zv: last && last.zv };
+  }
+
+  function tsatExact(fl, P, Tg) {
+    if (P >= fl.Pc) return fl.Tc;
+    let T = Tg || fl.Tc / (1 - Math.log(P / fl.Pc) / (5.373 * (1 + fl.w)));
+    T = Math.min(T, fl.Tc - 0.01);
+    let f = Math.log(satP(fl, T).P / P);
+    let T2 = T + (f > 0 ? -0.05 : 0.05), f2 = Math.log(satP(fl, T2).P / P);
+    for (let i = 0; i < 40; i++) {
+      if (Math.abs(f2) < 1e-10) break;
+      const den = f2 - f;
+      if (!isFinite(den) || den === 0) break;
+      let T3 = T2 - f2 * (T2 - T) / den;
+      T3 = Math.min(Math.max(T3, 100), fl.Tc - 0.001);
+      T = T2; f = f2; T2 = T3; f2 = Math.log(satP(fl, T2).P / P);
+    }
+    return T2;
+  }
+
+  /* ---------- fluid construction ---------- */
+  function fitAlpha(fl) {
+    const cal = fl.cal;
+    const res = (c1, c2) => { fl.c1 = c1; fl.c2 = c2; return cal.map(([T, P]) => Math.log(satP(fl, T).P / P)); };
+    let c1 = fl.c1, c2 = 0, ok = false;
+    for (let it = 0; it < 40; it++) {
+      const r = res(c1, c2);
+      if (Math.max(Math.abs(r[0]), Math.abs(r[1])) < 1e-9) { ok = true; break; }
+      const d = 1e-5, r1 = res(c1 + d, c2), r2 = res(c1, c2 + d);
+      const a = (r1[0] - r[0]) / d, b = (r2[0] - r[0]) / d, c = (r1[1] - r[1]) / d, e = (r2[1] - r[1]) / d;
+      const det = a * e - b * c;
+      if (!isFinite(det) || Math.abs(det) < 1e-14) break;
+      let d1 = (e * r[0] - b * r[1]) / det, d2 = (-c * r[0] + a * r[1]) / det;
+      const m = Math.max(Math.abs(d1), Math.abs(d2));
+      if (m > 0.3) { d1 *= 0.3 / m; d2 *= 0.3 / m; }
+      c1 -= d1; c2 -= d2;
+    }
+    if (!ok) {
+      c2 = 0; c1 = 0.37464 + 1.54226 * fl.w - 0.26992 * fl.w * fl.w;
+      for (let it = 0; it < 30; it++) {
+        const r = res(c1, 0)[0], r1 = res(c1 + 1e-5, 0)[0];
+        const dd = (r1 - r) / 1e-5;
+        if (!isFinite(dd) || dd === 0) break;
+        c1 -= r / dd;
+        if (Math.abs(r) < 1e-9) break;
+      }
+    }
+    fl.c1 = c1; fl.c2 = c2; fl.fitOk = ok;
+  }
+
+  function build(def) {
+    const fl = Object.assign({}, def);
+    fl.R = RU / def.M;
+    fl.ac = 0.45724 * fl.R * fl.R * def.Tc * def.Tc / def.Pc;
+    fl.b = 0.07780 * fl.R * def.Tc / def.Pc;
+    fl.c1 = 0.37464 + 1.54226 * def.w - 0.26992 * def.w * def.w; fl.c2 = 0;
+    const zra = 0.29056 - 0.08775 * def.w;
+    fl.cT = 0.50033 * (0.25969 - zra) * fl.R * def.Tc / def.Pc;
+    const c3 = def.cp[0] / def.M, c4 = def.cp[1] / def.M;
+    fl.k1 = (c4 - c3) / 100; fl.k0 = c3 - fl.k1 * 300;
+    fl.hOff = 0; fl.sOff = 0;
+    fitAlpha(fl);
+    setRef(fl, 'IIR');
+    return fl;
+  }
+
+  function setRef(fl, mode) {
+    fl.hOff = 0; fl.sOff = 0;
+    const Tr = mode === 'ASHRAE' ? 233.15 : 273.15;
+    const pr = props(fl, Tr, satP(fl, Tr).P, 'L');
+    fl.hOff = (mode === 'ASHRAE' ? 0 : 200) - pr.h;
+    fl.sOff = (mode === 'ASHRAE' ? 0 : 1) - pr.s;
+    fl.refMode = mode;
+    buildTable(fl);
+    fl.lines = null;
+  }
+
+  function buildTable(fl) {
+    const T = [], P = [], hf = [], hg = [], sf = [], sg = [], vf = [], vg = [];
+    const N = 200, Tlo = fl.tmin, Tup = fl.Tc * 0.9992;
+    for (let i = 0; i < N; i++) {
+      const u = i / (N - 1);
+      const t = Tup - (Tup - Tlo) * Math.pow(1 - u, 2.2);
+      const sp = satP(fl, t).P;
+      const l = props(fl, t, sp, 'L'), g = props(fl, t, sp, 'V');
+      T.push(t); P.push(sp); hf.push(l.h); hg.push(g.h); sf.push(l.s); sg.push(g.s); vf.push(l.v); vg.push(g.v);
+    }
+    const c = props(fl, fl.Tc, fl.Pc, 'V');
+    T.push(fl.Tc); P.push(fl.Pc); hf.push(c.h); hg.push(c.h); sf.push(c.s); sg.push(c.s); vf.push(c.v); vg.push(c.v);
+    fl.tab = { n: T.length, T, P, hf, hg, sf, sg, vf, vg, lnP: P.map(Math.log) };
+    fl.crit = c;
+    // default view
+    const Pmin = P[0] * 0.85, Pmax = fl.Pc * 1.5;
+    const hL = props(fl, fl.tmin, Pmax, 'L').h;
+    const hV = props(fl, fl.Tc + 60, Pmin, 'V').h;
+    fl.view = { Pmin, Pmax, h0: Math.floor((Math.min(hL, hf[0]) - 12) / 10) * 10, h1: Math.ceil(hV / 10) * 10 };
+  }
+
+  /* ---------- saturation lookup ---------- */
+  function satAtP(fl, P, exact) {
+    const t = fl.tab;
+    if (!exact && P >= t.P[0] && P <= fl.Pc) {
+      const lp = Math.log(P);
+      let lo = 0, hi = t.n - 1;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (t.lnP[m] <= lp) lo = m; else hi = m; }
+      const f = (lp - t.lnP[lo]) / (t.lnP[hi] - t.lnP[lo]);
+      const I = k => t[k][lo] + f * (t[k][hi] - t[k][lo]);
+      return { T: I('T'), P, hf: I('hf'), hg: I('hg'), sf: I('sf'), sg: I('sg'), vf: I('vf'), vg: I('vg') };
+    }
+    const T = tsatExact(fl, P);
+    const l = props(fl, T, P, 'L'), g = props(fl, T, P, 'V');
+    return { T, P, hf: l.h, hg: g.h, sf: l.s, sg: g.s, vf: l.v, vg: g.v };
+  }
+
+  function bisect(f, lo, hi) {
+    for (let i = 0; i < 52; i++) { const m = 0.5 * (lo + hi); if (f(m)) hi = m; else lo = m; }
+    return 0.5 * (lo + hi);
+  }
+  const TLO = 110, THI = 820;
+
+  /* generic inversion: key 'h'|'s'|'v'; returns {phase,T,x,h,s,v,P} */
+  function stateAt(fl, P, key, val, exact, sat) {
+    const sub = P < fl.Pc;
+    if (sub) {
+      sat = sat || satAtP(fl, P, exact);
+      const lo = sat[key + 'f'], hi = sat[key + 'g'];
+      if (val >= lo && val <= hi) {
+        const x = (val - lo) / (hi - lo);
+        return { phase: '2ph', T: sat.T, x, P, h: sat.hf + x * (sat.hg - sat.hf), s: sat.sf + x * (sat.sg - sat.sf), v: sat.vf + x * (sat.vg - sat.vf) };
+      }
+      if (val < lo) {
+        const T = bisect(t => props(fl, t, P, 'L')[key] >= val, TLO, sat.T);
+        const r = props(fl, T, P, 'L'); r.phase = 'liq'; return r;
+      }
+      const T = bisect(t => props(fl, t, P, 'V')[key] >= val, sat.T, THI);
+      const r = props(fl, T, P, 'V'); r.phase = 'vap'; return r;
+    }
+    const T = bisect(t => props(fl, t, P, 'V')[key] >= val, TLO, THI);
+    const r = props(fl, T, P, 'V'); r.phase = 'sc'; return r;
+  }
+  const stateAtPH = (fl, P, h, exact, sat) => stateAt(fl, P, 'h', h, exact, sat);
+  const stateAtPS = (fl, P, s, exact, sat) => stateAt(fl, P, 's', s, exact, sat);
+
+  function stateAtPT(fl, P, T) {
+    if (P < fl.Pc) {
+      const ts = tsatExact(fl, P);
+      const r = props(fl, T, P, T < ts ? 'L' : 'V');
+      r.phase = T < ts ? 'liq' : 'vap'; return r;
+    }
+    const r = props(fl, T, P, 'V'); r.phase = 'sc'; return r;
+  }
+
+  /* ---------- cycle ---------- */
+  function cycle(fl, p) {
+    const fail = msg => ({ ok: false, err: msg });
+    const Te = p.Te + 273.15;
+    if (!(p.SH >= 0)) return fail('Superheat cannot be negative.');
+    if (!(p.eta > 0.05 && p.eta <= 1)) return fail('Isentropic efficiency must be between 5 and 100 %.');
+    if (Te < fl.tmin - 0.01) return fail('Evaporating temperature is below the chart range for this fluid (' + (fl.tmin - 273.15).toFixed(0) + ' °C).');
+    if (Te >= fl.Tc - 2) return fail('Evaporating temperature is too close to the critical point.');
+    const Pe = satP(fl, Te).P;
+    const T1 = Te + p.SH;
+    const st1 = props(fl, T1, Pe, 'V'); st1.phase = 'vap';
+    let Pk, st3;
+    if (p.mode === 'gc') {
+      Pk = p.Pgc * 100;
+      if (!(Pk > Pe * 1.05)) return fail('Gas cooler pressure must be above the evaporating pressure.');
+      const T3 = p.Tgc + 273.15;
+      if (T3 < 150) return fail('Gas cooler outlet temperature is too low.');
+      st3 = stateAtPT(fl, Pk, T3);
+    } else {
+      const Tk = p.Tcd + 273.15;
+      if (Tk >= fl.Tc - 0.5) return fail('Condensing temperature must stay below the critical temperature (' + (fl.Tc - 273.15).toFixed(1) + ' °C). For a transcritical cycle, switch High side to Gas cooler.');
+      if (Tk <= Te + 0.5) return fail('Condensing temperature must be above the evaporating temperature.');
+      Pk = satP(fl, Tk).P;
+      const T3 = Tk - p.SC;
+      if (p.SC < 0) return fail('Subcooling cannot be negative.');
+      if (T3 < 150) return fail('Subcooling is too large.');
+      st3 = props(fl, T3, Pk, 'L'); st3.phase = 'liq';
+    }
+    const st2s = stateAtPS(fl, Pk, st1.s, true);
+    const h2 = st1.h + (st2s.h - st1.h) / p.eta;
+    const st2 = stateAtPH(fl, Pk, h2, true);
+    const st4 = stateAtPH(fl, Pe, st3.h, true);
+    const subK = Pk < fl.Pc;
+    const satK = subK ? satAtP(fl, Pk, true) : null;
+    return {
+      ok: true, Pe, Pk, st1, st2s, st2, st3, st4, satK,
+      qe: st1.h - st4.h, w: st2.h - st1.h, qc: st2.h - st3.h,
+      cop: (st1.h - st4.h) / (st2.h - st1.h), copH: (st2.h - st3.h) / (st2.h - st1.h), pr: Pk / Pe,
+      dsh: subK ? st2.T - satK.T : null, eta: (st2s.h - st1.h) / (st2.h - st1.h),
+      sh: st1.T - Te, sc: subK ? satK.T - st3.T : null
+    };
+  }
+
+  /* cycle from measured points: Ps, Pd in kPa abs; Ts, Td, T3 in K */
+  function cycleFromPoints(fl, p) {
+    const fail = msg => ({ ok: false, err: msg });
+    const Ps = p.Ps, Pd = p.Pd, Ts = p.Ts, Td = p.Td, T3 = p.T3, g = fl.glide || 0;
+    if (!(Ps > 10)) return fail('Suction pressure is too low.');
+    if (Ps >= fl.Pc) return fail('Suction pressure must be below the critical pressure (' + (fl.Pc / 100).toFixed(1) + ' bar a).');
+    if (!(Pd > Ps * 1.02)) return fail('Discharge pressure must be above the suction pressure.');
+    if (!(Ts > 150 && Td > 150 && T3 > 150 && Ts < 800 && Td < 800 && T3 < 800)) return fail('A temperature is out of range.');
+    const satS = satAtP(fl, Ps, true);
+    const dewS = satS.T + g / 2;
+    if (Ts < dewS - 0.3) return fail('Suction temperature is below the ' + (g ? 'dew point' : 'saturation temperature') + ' (' + (dewS - 273.15).toFixed(1) + ' \u00B0C at that pressure). Check the suction readings.');
+    const st1 = props(fl, Math.max(Ts, satS.T), Ps, 'V'); st1.phase = 'vap';
+    const satK = Pd < fl.Pc ? satAtP(fl, Pd, true) : null;
+    const dewK = satK ? satK.T + g / 2 : null, bubK = satK ? satK.T - g / 2 : null;
+    if (satK && Td < dewK) return fail('Discharge temperature is below the ' + (g ? 'dew point' : 'saturation temperature') + ' (' + (dewK - 273.15).toFixed(1) + ' \u00B0C at that pressure). Check the discharge readings.');
+    const st2 = props(fl, Td, Pd, 'V'); st2.phase = satK ? 'vap' : 'sc';
+    let st3, note = null;
+    if (satK) {
+      if (T3 > bubK + 0.5) return fail('Liquid line temperature is above the ' + (g ? 'bubble point' : 'saturation temperature') + ' (' + (bubK - 273.15).toFixed(1) + ' \u00B0C at the discharge pressure), so the liquid is not subcooled. Check the readings.');
+      if (T3 >= satK.T) { st3 = props(fl, satK.T, Pd, 'L'); note = 'No subcooling: liquid taken as saturated.'; }
+      else st3 = props(fl, T3, Pd, 'L');
+      st3.phase = 'liq';
+    } else st3 = stateAtPT(fl, Pd, T3);
+    if (!(st2.h > st1.h)) return fail('Discharge enthalpy is not above suction enthalpy. Check the discharge readings.');
+    const st4 = stateAtPH(fl, Ps, st3.h, true);
+    if (!(st1.h > st4.h)) return fail('No cooling effect from these readings. Check the liquid line temperature.');
+    const st2s = stateAtPS(fl, Pd, st1.s, true);
+    const hDewS = props(fl, Math.max(dewS, satS.T), Ps, 'V').h;
+    const hBubK = satK ? props(fl, Math.min(bubK, satK.T), Pd, 'L').h : null;
+    return {
+      ok: true, measured: true, note, glide: g, Pe: Ps, Pk: Pd, st1, st2s, st2, st3, st4, satK, satS, hDewS, hBubK,
+      qe: st1.h - st4.h, w: st2.h - st1.h, qc: st2.h - st3.h,
+      cop: (st1.h - st4.h) / (st2.h - st1.h), copH: (st2.h - st3.h) / (st2.h - st1.h), pr: Pd / Ps,
+      dsh: satK ? Td - dewK : null, eta: (st2s.h - st1.h) / (st2.h - st1.h),
+      sh: Ts - dewS, sc: satK ? bubK - T3 : null, Tevap: dewS, Tcond: dewK, Tbub: bubK
+    };
+  }
+
+  function compressionPath(fl, cyc, eta, n) {
+    const out = [];
+    const a = Math.log(cyc.Pe), b = Math.log(cyc.Pk);
+    for (let i = 0; i <= n; i++) {
+      const P = Math.exp(a + (b - a) * i / n);
+      const hi = i === 0 ? cyc.st1.h : (i === n ? cyc.st2s.h : stateAtPS(fl, P, cyc.st1.s, false).h);
+      out.push([cyc.st1.h + (hi - cyc.st1.h) / eta, P]);
+    }
+    return out;
+  }
+
+  /* ---------- chart lines ---------- */
+  function niceStep(range, maxCount, cands) {
+    for (const c of cands) if (range / c <= maxCount) return c;
+    return cands[cands.length - 1];
+  }
+
+  function buildLines(fl) {
+    const V = fl.view, t = fl.tab;
+    const N = 150, grid = [], sats = [];
+    for (let i = 0; i < N; i++) {
+      const P = V.Pmin * Math.pow(V.Pmax / V.Pmin, i / (N - 1));
+      grid.push(P);
+      sats.push(P < fl.Pc ? satAtP(fl, P, false) : null);
+    }
+    const L = { iso: [], ent: [], vol: [], qual: [] };
+
+    // isotherms
+    const Tlo = Math.ceil((fl.tmin - 273.15) / 10) * 10, Thi = Math.floor((fl.Tc - 273.15 + 70) / 10) * 10;
+    for (let tc = Tlo; tc <= Thi; tc += 10) {
+      const T = tc + 273.15, pts = [];
+      let nv = 0;
+      if (T < fl.Tc) {
+        const Ps = satP(fl, T).P;
+        if (Ps > V.Pmin) {
+          for (let i = 0; i < N && grid[i] < Ps; i++) pts.push([props(fl, T, grid[i], 'V').h, grid[i]]);
+          const g = props(fl, T, Ps, 'V'), l = props(fl, T, Ps, 'L');
+          pts.push([g.h, Ps]); nv = pts.length;
+          pts.push([l.h, Ps]);
+          for (let i = 0; i < N; i++) if (grid[i] > Ps) pts.push([props(fl, T, grid[i], 'L').h, grid[i]]);
+        } else {
+          for (let i = 0; i < N; i++) pts.push([props(fl, T, grid[i], 'L').h, grid[i]]);
+          nv = 0;
+        }
+      } else {
+        for (let i = 0; i < N; i++) pts.push([props(fl, T, grid[i], 'V').h, grid[i]]);
+        nv = pts.length;
+      }
+      L.iso.push({ val: tc, pts, nv });
+    }
+
+    // isentropes
+    const sMin = t.sf[0], sMax = props(fl, fl.Tc + 70, V.Pmin, 'V').s;
+    const sStep = niceStep(sMax - sMin, 26, [0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1]);
+    for (let s = Math.ceil(sMin / sStep) * sStep; s <= sMax; s += sStep) {
+      const sv = Math.round(s / sStep) * sStep;
+      const segs = []; let cur = [];
+      for (let i = 0; i < N; i++) {
+        const sat = sats[i];
+        if (sat && sv < sat.sf) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+        const r = stateAt(fl, grid[i], 's', sv, false, sat);
+        cur.push([r.h, grid[i]]);
+      }
+      if (cur.length) segs.push(cur);
+      if (segs.length) L.ent.push({ val: sv, segs, step: sStep });
+    }
+
+    // isochores
+    const vMinLine = fl.crit.v * 1.05, vMaxLine = t.vg[0] * 1.0;
+    const nice = [1, 2, 3, 5, 7];
+    const vals = [];
+    for (let e = -5; e <= 1; e++) for (const m of nice) { const v = m * Math.pow(10, e); if (v >= vMinLine && v <= vMaxLine) vals.push(v); }
+    for (const v of vals) {
+      const segs = []; let cur = [];
+      for (let i = 0; i < N; i++) {
+        const P = grid[i], sat = sats[i];
+        if (sat) {
+          if (v < sat.vf) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+          if (v <= sat.vg) { const x = (v - sat.vf) / (sat.vg - sat.vf); cur.push([sat.hf + x * (sat.hg - sat.hf), P]); continue; }
+          const T = bisect(tt => props(fl, tt, P, 'V').v >= v, sat.T, THI);
+          cur.push([props(fl, T, P, 'V').h, P]);
+        } else {
+          if (props(fl, TLO, P, 'V').v > v) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+          const T = bisect(tt => props(fl, tt, P, 'V').v >= v, TLO, THI);
+          cur.push([props(fl, T, P, 'V').h, P]);
+        }
+      }
+      if (cur.length) segs.push(cur);
+      if (segs.length) L.vol.push({ val: v, segs });
+    }
+
+    // quality lines
+    for (let q = 1; q <= 9; q++) {
+      const x = q / 10, pts = [];
+      for (let i = 0; i < t.n; i++) pts.push([t.hf[i] + x * (t.hg[i] - t.hf[i]), t.P[i]]);
+      L.qual.push({ val: x, pts });
+    }
+    fl.lines = L;
+    return L;
+  }
+
+  const cache = {};
+  function get(id, ref) {
+    if (!cache[id]) cache[id] = build(DEFS.find(d => d.id === id));
+    const fl = cache[id];
+    if (fl.refMode !== ref) setRef(fl, ref);
+    return fl;
+  }
+
+  return { DEFS, build, get, props, satP, satAtP, tsatExact, stateAtPH, stateAtPS, stateAtPT, cycle, cycleFromPoints, compressionPath, buildLines };
+})();
+
+(function () {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const PU = {
+    bara: { l: 'bar a', d: 2, f: k => k / 100, t: v => v * 100 },
+    barg: { l: 'bar g', d: 2, f: k => k / 100 - 1.01325, t: v => (v + 1.01325) * 100 },
+    psia: { l: 'psi a', d: 1, f: k => k / 6.894757, t: v => v * 6.894757 },
+    psig: { l: 'psi g', d: 1, f: k => k / 6.894757 - 14.6959, t: v => (v + 14.6959) * 6.894757 },
+    kpaa: { l: 'kPa a', d: 0, f: k => k, t: v => v },
+    kpag: { l: 'kPa g', d: 0, f: k => k - 101.325, t: v => v + 101.325 }
+  };
+  const KEYS = ['fluid', 'ref', 'pu', 'Ps', 'Ts', 'Pd', 'Td', 'T3', 'touched', 'ly', 'site', 'eng', 'notes'];
+  const S = { fluid: 'R134a', ref: 'IIR', pu: 'barg', Ps: 1, Ts: 0, Pd: 9, Td: 68, T3: 35, touched: false, site: '', eng: '', notes: '', ly: { iso: true, ent: true, vol: false, qual: true } };
+  const SKEY = 'mollier-desk-v2';
+  try {
+    const saved = JSON.parse(localStorage.getItem(SKEY) || '{}');
+    KEYS.forEach(k => { if (saved[k] !== undefined) S[k] = saved[k]; });
+    if (!MD.DEFS.some(d => d.id === S.fluid)) S.fluid = 'R134a';
+    if (!PU[S.pu]) S.pu = 'barg';
+    S.ly = Object.assign({ iso: true, ent: true, vol: false, qual: true }, S.ly || {});
+  } catch (e) { /* storage unavailable */ }
+  function save() { try { const o = {}; KEYS.forEach(k => { o[k] = S[k]; }); localStorage.setItem(SKEY, JSON.stringify(o)); } catch (e) { /* ignore */ } }
+
+  const cur = { fl: null, cyc: null, comp: null, probe: null, sticky: false, pts: null };
+  let view = null, base = null, geo = null, raf = 0;
+
+  const C2 = K => K - 273.15;
+  const num = (v, d) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(d) : '\u2014';
+  const rnd = v => Math.round(v * 100) / 100;
+  const rnd1 = v => Math.round(v * 10) / 10;
+  const barA = kPa => { const b = kPa / 100; return b < 1 ? b.toFixed(3) : b < 10 ? b.toFixed(2) : b < 100 ? b.toFixed(1) : b.toFixed(0); };
+  const pSel = kPa => num(PU[S.pu].f(kPa), PU[S.pu].d);
+  const phaseName = st => st.phase === '2ph' ? 'x = ' + st.x.toFixed(2) : st.phase === 'liq' ? 'Liquid' : st.phase === 'vap' ? 'Vapour' : 'Supercritical';
+  const vFmt = v => num(v, v < 0.01 ? 5 : 4);
+
+  const MONO = '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
+  const SANS = '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif';
+  function colors() {
+    const cs = getComputedStyle(document.documentElement);
+    const g = n => (cs.getPropertyValue(n) || '').trim() || '#888';
+    return { bg: g('--chart-bg'), ink: g('--ink'), ink2: g('--ink-2'), ink3: g('--ink-3'), grid: g('--grid'), grid2: g('--grid-2'), iso: g('--c-iso'), ent: g('--c-ent'), vol: g('--c-vol'), dome: g('--c-dome'), fill: g('--c-fill'), accent: g('--accent'), accentInk: g('--accent-ink'), sh: g('--c-sh'), sc: g('--c-sc') };
+  }
+
+  /* ---------- fluid and view ---------- */
+  function resetView() {
+    const v = cur.fl.view;
+    base = { h0: v.h0, h1: v.h1, lp0: Math.log(v.Pmin), lp1: Math.log(v.Pmax) };
+    view = Object.assign({}, base);
+  }
+  function fitView() {
+    const c = cur.cyc;
+    if (!c) { resetView(); return; }
+    const hs = [c.st1.h, c.st2.h, c.st3.h, c.st4.h];
+    if (c.satS) hs.push(c.satS.hg);
+    if (c.satK) hs.push(c.satK.hf, c.satK.hg);
+    const h0 = Math.min.apply(null, hs), h1 = Math.max.apply(null, hs);
+    const hp = Math.max((h1 - h0) * 0.16, 14), lr = Math.log(c.Pk / c.Pe), lpad = Math.max(lr * 0.3, 0.3);
+    if (!base) { const v = cur.fl.view; base = { h0: v.h0, h1: v.h1, lp0: Math.log(v.Pmin), lp1: Math.log(v.Pmax) }; }
+    view = clampView({ h0: h0 - hp, h1: h1 + hp, lp0: Math.log(c.Pe) - lpad, lp1: Math.log(c.Pk) + lpad });
+  }
+  function pointsInView() {
+    const c = cur.cyc; if (!c) return true;
+    return [c.st1, c.st2, c.st3, c.st4].every((s, i) => {
+      const P = i === 0 || i === 3 ? c.Pe : c.Pk, lp = Math.log(P);
+      return s.h >= view.h0 && s.h <= view.h1 && lp >= view.lp0 && lp <= view.lp1;
+    });
+  }
+  function fillExample() {
+    const d = cur.fl.def;
+    const c0 = MD.cycle(cur.fl, { Te: d.Te, SH: d.SH, Tcd: d.Tcd, SC: d.SC, Pgc: d.Pgc || 90, Tgc: d.Tgc || 35, eta: 0.7, mode: d.mode || 'cond' });
+    if (!c0.ok) return;
+    const u = PU[S.pu];
+    const pr = v => +v.toFixed(u.d);
+    S.Ps = pr(u.f(c0.Pe)); S.Pd = pr(u.f(c0.Pk));
+    const gh = (cur.fl.glide || 0) / 2;
+    S.Ts = rnd1(C2(c0.st1.T) + gh); S.Td = rnd1(C2(c0.st2.T)); S.T3 = rnd1(C2(c0.st3.T) - gh);
+    S.touched = false;
+  }
+  function selectFluid(id) {
+    S.fluid = id;
+    cur.fl = MD.get(id, S.ref);
+    if (!cur.fl.lines) MD.buildLines(cur.fl);
+    const f = cur.fl;
+    $('fluidMeta').textContent = f.note + ' \u00B7 critical ' + C2(f.Tc).toFixed(1) + ' \u00B0C, ' + barA(f.Pc) + ' bar a';
+    const gl = f.glide >= 1;
+    $('fluidWarn').textContent = gl ? 'Temperature glide is about ' + f.glide + ' K. Superheat is measured from the dew point and subcooling from the bubble point. ' + (f.warn || '') : (f.warn || 'The ideal-gas heat capacity for this fluid is estimated, so enthalpy differences are less certain than for the other fluids.');
+    $('fluidWarn').hidden = !(f.est || gl);
+    resetView();
+    if (!S.touched) fillExample();
+  }
+
+  /* ---------- inputs ---------- */
+  const NUM = { inpPs: 'Ps', inpTs: 'Ts', inpPd: 'Pd', inpTd: 'Td', inpT3: 'T3' };
+  function syncInputs() {
+    Object.keys(NUM).forEach(id => { $(id).value = isFinite(S[NUM[id]]) ? S[NUM[id]] : ''; });
+    $('fluidSel').value = S.fluid; $('puSel').value = S.pu; $('refSel').value = S.ref;
+    document.querySelectorAll('.pu').forEach(e => { e.textContent = PU[S.pu].l; });
+    $('thP').textContent = 'p ' + PU[S.pu].l;
+    $('lyIso').checked = S.ly.iso; $('lyEnt').checked = S.ly.ent; $('lyVol').checked = S.ly.vol; $('lyQual').checked = S.ly.qual;
+    $('exNote').hidden = S.touched; $('btnExample').hidden = !S.touched;
+    $('inpSite').value = S.site || ''; $('inpEng').value = S.eng || ''; $('inpNotes').value = S.notes || '';
+  }
+  function bindInputs() {
+    const sel = $('fluidSel');
+    [['HFC', 'HFC and HCFC'], ['HFO', 'HFO'], ['Blends', 'Blends'], ['Natural', 'Natural']].forEach(([g, label]) => {
+      const og = document.createElement('optgroup'); og.label = label;
+      MD.DEFS.filter(d => d.grp === g).forEach(d => { const o = document.createElement('option'); o.value = d.id; o.textContent = d.name; og.appendChild(o); });
+      sel.appendChild(og);
+    });
+    sel.addEventListener('change', () => { cur.probe = null; cur.sticky = false; selectFluid(sel.value); syncInputs(); recompute(true); });
+    Object.keys(NUM).forEach(id => {
+      $(id).addEventListener('input', () => { S[NUM[id]] = parseFloat($(id).value); S.touched = true; $('exNote').hidden = true; $('btnExample').hidden = false; recompute(false); });
+    });
+    $('puSel').addEventListener('change', () => {
+      const o = PU[S.pu], n = PU[$('puSel').value];
+      if (isFinite(S.Ps)) S.Ps = +n.f(o.t(S.Ps)).toFixed(n.d);
+      if (isFinite(S.Pd)) S.Pd = +n.f(o.t(S.Pd)).toFixed(n.d);
+      S.pu = $('puSel').value; syncInputs(); recompute(false);
+    });
+    $('btnExample').addEventListener('click', () => { fillExample(); syncInputs(); recompute(true); });
+    $('refSel').addEventListener('change', () => { S.ref = $('refSel').value; selectFluid(S.fluid); recompute(true); });
+    [['lyIso', 'iso'], ['lyEnt', 'ent'], ['lyVol', 'vol'], ['lyQual', 'qual']].forEach(([id, k]) => {
+      $(id).addEventListener('change', () => { S.ly[k] = $(id).checked; draw(); save(); });
+    });
+    $('btnFit').addEventListener('click', () => { fitView(); draw(); });
+    $('btnFull').addEventListener('click', () => { resetView(); draw(); });
+    $('btnCopy').addEventListener('click', copyResults);
+    $('tbody').addEventListener('click', e => { const r = e.target.closest ? e.target.closest('tr[data-k]') : null; if (r) selectPoint(r.getAttribute('data-k')); });
+    $('tbody').addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.getAttribute && e.target.getAttribute('data-k')) { e.preventDefault(); selectPoint(e.target.getAttribute('data-k')); } });
+    $('legend').addEventListener('click', e => { const b = e.target.closest ? e.target.closest('button[data-k]') : null; if (b) selectPoint(b.getAttribute('data-k')); });
+    $('ro').addEventListener('click', e => { if (e.target.closest && e.target.closest('.x')) { cur.probe = null; cur.sticky = false; draw(); } });
+  }
+
+  /* ---------- calculation ---------- */
+  function showMsg(t) { const m = $('msg'); m.textContent = t; m.hidden = !t; }
+  const POINTS = [['1', 'Suction'], ['2', 'Discharge'], ['3', 'Liquid line'], ['4', 'After expansion']];
+  function buildPts() {
+    const c = cur.cyc;
+    cur.pts = c ? [
+      { k: '1', name: 'Suction', st: c.st1, P: c.Pe, meas: true },
+      { k: '2', name: 'Discharge', st: c.st2, P: c.Pk, meas: true },
+      { k: '3', name: 'Liquid line', st: c.st3, P: c.Pk, meas: true },
+      { k: '4', name: 'After expansion', st: c.st4, P: c.Pe, meas: false }
+    ] : null;
+  }
+  function recompute(refit) {
+    const bad = ['Ps', 'Ts', 'Pd', 'Td', 'T3'].find(k => !isFinite(S[k]));
+    if (bad) { showMsg('Enter all five readings to calculate.'); cur.cyc = null; }
+    else {
+      const c = MD.cycleFromPoints(cur.fl, { Ps: PU[S.pu].t(S.Ps), Pd: PU[S.pu].t(S.Pd), Ts: S.Ts + 273.15, Td: S.Td + 273.15, T3: S.T3 + 273.15 });
+      if (!c.ok) { showMsg(c.err); cur.cyc = null; }
+      else {
+        showMsg(''); cur.cyc = c;
+        cur.comp = MD.compressionPath(cur.fl, c, Math.min(1, Math.max(0.05, c.eta)), 40);
+      }
+    }
+    buildPts();
+    if (cur.probe && cur.probe.snap) { const p = cur.pts && cur.pts.find(q => q.k === cur.probe.snap); if (p) { cur.probe.h = p.st.h; cur.probe.P = p.P; } else { cur.probe = null; cur.sticky = false; } }
+    if (cur.cyc && (refit || !pointsInView())) resetView();
+    renderKpi(); renderTable(); renderLegend(); draw(); save();
+  }
+
+  /* ---------- results ---------- */
+  function kpi(label, val, unit, cls, sub) {
+    return '<div class="kpi' + (cls ? ' ' + cls : '') + '"><span class="kpi-l">' + label + '</span><span class="kpi-v">' + val + (unit ? '<small>' + unit + '</small>' : '') + '</span>' + (sub ? '<span class="kpi-sub">' + sub + '</span>' : '') + '</div>';
+  }
+  function renderKpi() {
+    const c = cur.cyc, el = $('kpi');
+    if (!c) {
+      el.innerHTML = kpi('Superheat', '\u2014', '', 'kpi-main k-sh') + kpi('Subcooling', '\u2014', '', 'kpi-main k-sc') + kpi('COP (cooling)', '\u2014', '', 'kpi-main k-cop');
+      return;
+    }
+    const scTxt = c.sc === null ? '\u2014' : num(c.sc, 1), gl = c.glide >= 1;
+    el.innerHTML =
+      kpi('Superheat', num(c.sh, 1), 'K', 'kpi-main k-sh', 'Suction ' + num(S.Ts, 1) + ' \u00B0C, ' + (gl ? 'dew point ' : 'saturated ') + num(C2(c.Tevap), 1) + ' \u00B0C') +
+      kpi('Subcooling', scTxt, c.sc === null ? '' : 'K', 'kpi-main k-sc', c.sc === null ? 'Above the critical pressure, no saturation' : 'Liquid line ' + num(S.T3, 1) + ' \u00B0C, ' + (gl ? 'bubble point ' : 'saturated ') + num(C2(c.Tbub), 1) + ' \u00B0C') +
+      kpi('COP (cooling)', num(c.cop, 2), '', 'kpi-main k-cop', 'Heating COP ' + num(c.copH, 2) + (c.note ? '. ' + c.note : '')) +
+      kpi(gl ? 'Evaporating (dew)' : 'Evaporating (sat.)', num(C2(c.Tevap), 1), '\u00B0C') +
+      kpi(gl ? 'Condensing (dew)' : 'Condensing (sat.)', c.Tcond === null ? '\u2014' : num(C2(c.Tcond), 1), c.Tcond === null ? '' : '\u00B0C') +
+      kpi('Discharge above sat.', c.dsh === null ? '\u2014' : num(c.dsh, 1), c.dsh === null ? '' : 'K') +
+      kpi('Pressure ratio', num(c.pr, 2)) +
+      kpi('Isentropic efficiency', num(c.eta * 100, 1), '%') +
+      kpi('Cooling effect', num(c.qe, 1), 'kJ/kg') +
+      kpi('Compressor work', num(c.w, 1), 'kJ/kg');
+  }
+  function renderTable() {
+    const tb = $('tbody');
+    if (!cur.pts) { tb.innerHTML = '<tr><td colspan="7" class="empty">No cycle to show.</td></tr>'; return; }
+    const sel = cur.probe && cur.probe.snap;
+    tb.innerHTML = cur.pts.map(p =>
+      '<tr data-k="' + p.k + '" tabindex="0" class="' + (sel === p.k ? 'on' : '') + '"><th scope="row"><span class="badge">' + p.k + '</span>' + p.name + (p.meas ? '' : ' (calculated)') + '</th><td>' + pSel(p.P) + '</td><td>' + num(C2(p.st.T), 1) + '</td><td>' + num(p.st.h, 1) + '</td><td>' + num(p.st.s, 3) + '</td><td>' + vFmt(p.st.v) + '</td><td>' + phaseName(p.st) + '</td></tr>'
+    ).join('');
+  }
+  function renderLegend() {
+    const sel = cur.probe && cur.probe.snap;
+    $('legend').innerHTML = (cur.pts ? cur.pts.map(p => '<button type="button" data-k="' + p.k + '" aria-pressed="' + (sel === p.k) + '"><span class="badge">' + p.k + '</span>' + p.name + '</button>').join('') : '') +
+      '<span class="key"><i style="background: var(--c-sh)"></i>Superheat</span><span class="key"><i style="background: var(--c-sc)"></i>Subcooling</span>';
+  }
+  function copyResults() {
+    const c = cur.cyc; if (!c) return;
+    const pl = PU[S.pu].l;
+    const t = [
+      cur.fl.name + ' readings: suction ' + S.Ps + ' ' + pl + ', ' + S.Ts + ' \u00B0C; discharge ' + S.Pd + ' ' + pl + ', ' + S.Td + ' \u00B0C; liquid line ' + S.T3 + ' \u00B0C',
+      'Superheat ' + num(c.sh, 1) + ' K, subcooling ' + (c.sc === null ? 'n/a' : num(c.sc, 1) + ' K'),
+      'Evaporating ' + num(C2(c.Tevap), 1) + ' \u00B0C, condensing ' + (c.Tcond === null ? 'n/a' : num(C2(c.Tcond), 1) + ' \u00B0C'),
+      'COP (cooling) ' + num(c.cop, 2) + ', COP (heating) ' + num(c.copH, 2),
+      'Pressure ratio ' + num(c.pr, 2) + ', isentropic efficiency ' + num(c.eta * 100, 1) + ' %'
+    ].join('\n');
+    const done = ok => { const b = $('btnCopy'); const old = b.getAttribute('data-l') || b.textContent; b.setAttribute('data-l', old); b.textContent = ok ? 'Copied' : 'Copy not available'; setTimeout(() => { b.textContent = old; }, 1600); };
+    try { navigator.clipboard.writeText(t).then(() => done(true), () => done(false)); } catch (e) { done(false); }
+  }
+
+  /* ---------- probe ---------- */
+  function selectPoint(k) {
+    const p = cur.pts && cur.pts.find(q => q.k === k); if (!p) return;
+    cur.probe = { h: p.st.h, P: p.P, snap: k }; cur.sticky = true;
+    renderTable(); renderLegend(); draw();
+  }
+  function snapAt(x, y, radius) {
+    if (!cur.pts || !geo) return null;
+    let best = null, bd = radius;
+    cur.pts.forEach(p => {
+      const d = Math.hypot(geo.fx(p.st.h) - x, geo.fy(p.P) - y);
+      if (d <= bd) { bd = d; best = p; }
+    });
+    return best;
+  }
+  function setProbe(pt, sticky, radius) {
+    if (!geo || pt.x < geo.m.l || pt.x > geo.m.l + geo.pw || pt.y < geo.m.t || pt.y > geo.m.t + geo.ph) return false;
+    const s = snapAt(pt.x, pt.y, radius);
+    cur.probe = s ? { h: s.st.h, P: s.P, snap: s.k } : { h: geo.inv.h(pt.x), P: geo.inv.P(pt.y), snap: null };
+    cur.sticky = sticky;
+    return true;
+  }
+  function syncSel() { renderTable(); renderLegend(); }
+  function cell(l, v, em) { return '<div' + (em ? ' class="em"' : '') + '><span>' + l + '</span><b>' + v + '</b></div>'; }
+  function probeHtml() {
+    const pr = cur.probe, fl = cur.fl, c = cur.cyc;
+    if (!pr) return '<p class="ro-hint">Touch and hold the chart to read any point, then slide to move. Tap a numbered point to see your reading there. With a mouse, hover to read and click to hold.</p>';
+    const pt = pr.snap && cur.pts ? cur.pts.find(q => q.k === pr.snap) : null;
+    let st, title, extra = '';
+    if (pt) {
+      st = pt.st;
+      title = '<span class="badge">' + pt.k + '</span>' + pt.name + ' <small>' + (pt.meas ? 'your reading' : 'calculated') + '</small>';
+      if (pt.k === '1') extra = cell('Superheat', num(c.sh, 1) + ' K', true) + cell(c.glide >= 1 ? 'Dew point at p' : 'Saturated at p', num(C2(c.Tevap), 1) + ' \u00B0C');
+      else if (pt.k === '2') extra = cell('Above saturation', c.dsh === null ? '\u2014' : num(c.dsh, 1) + ' K', true) + cell(c.glide >= 1 ? 'Dew point at p' : 'Saturated at p', c.Tcond === null ? '\u2014' : num(C2(c.Tcond), 1) + ' \u00B0C') + cell('Isentropic eff.', num(c.eta * 100, 1) + ' %');
+      else if (pt.k === '3') extra = cell('Subcooling', c.sc === null ? '\u2014' : num(c.sc, 1) + ' K', true) + cell(c.glide >= 1 ? 'Bubble point at p' : 'Saturated at p', c.Tbub === null || c.Tbub === undefined ? '\u2014' : num(C2(c.Tbub), 1) + ' \u00B0C');
+      else extra = cell('Flash gas', st.phase === '2ph' ? num(st.x * 100, 0) + ' %' : '\u2014', true);
+    } else {
+      try { st = MD.stateAtPH(fl, pr.P, pr.h, false); } catch (e) { return ''; }
+      title = 'Point on the chart';
+    }
+    const unit = PU[S.pu].l;
+    return '<div class="ro-h"><span class="ttl">' + title + '</span><button type="button" class="x" aria-label="Close readout">\u00D7</button></div>' +
+      '<div class="cells">' + cell('Pressure', pSel(pr.P) + ' <small>' + unit + '</small>') +
+      (S.pu !== 'bara' ? cell('Absolute', barA(pr.P) + ' <small>bar a</small>') : '') +
+      cell('Temperature', num(C2(st.T), 1) + ' <small>\u00B0C</small>') +
+      cell('Enthalpy', num(st.h, 1) + ' <small>kJ/kg</small>') +
+      cell('Entropy', num(st.s, 3) + ' <small>kJ/kgK</small>') +
+      cell('Volume', vFmt(st.v) + ' <small>m\u00B3/kg</small>') +
+      cell('State', phaseName(st)) + extra + '</div>';
+  }
+  function updateReadout() {
+    const ro = $('ro');
+    ro.innerHTML = probeHtml();
+    ro.className = 'ro' + (cur.probe && cur.probe.snap ? ' snap' : '');
+  }
+
+  /* ---------- chart ---------- */
+  function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p; }
+  function clampView(v) {
+    const b = base, sh = b.h1 - b.h0, sl = b.lp1 - b.lp0;
+    const ws = Math.min(Math.max(v.h1 - v.h0, sh * 0.03), sh * 1.25), ls = Math.min(Math.max(v.lp1 - v.lp0, sl * 0.03), sl * 1.25);
+    let ch = (v.h0 + v.h1) / 2, cl = (v.lp0 + v.lp1) / 2;
+    ch = Math.min(Math.max(ch, b.h0 - sh * 0.1), b.h1 + sh * 0.1);
+    cl = Math.min(Math.max(cl, b.lp0 - sl * 0.1), b.lp1 + sl * 0.1);
+    return { h0: ch - ws / 2, h1: ch + ws / 2, lp0: cl - ls / 2, lp1: cl + ls / 2 };
+  }
+
+  function draw(o) {
+    const fl = cur.fl, cv = o ? o.cv : $('cv');
+    if (!fl || !view) return;
+    const dpr = o ? o.dpr : (window.devicePixelRatio || 1), W = o ? o.W : cv.clientWidth, H = o ? o.H : cv.clientHeight;
+    if (!W || !H) return;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const C = o ? o.C : colors();
+    ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
+    const m = { l: W < 520 ? 42 : 52, r: 10, t: 10, b: 36 };
+    const pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const fx = h => m.l + (h - view.h0) / (view.h1 - view.h0) * pw;
+    const fy = P => m.t + (view.lp1 - Math.log(P)) / (view.lp1 - view.lp0) * ph;
+    geo = { m, pw, ph, W, H, fx, fy, inv: { h: x => view.h0 + (x - m.l) / pw * (view.h1 - view.h0), P: y => Math.exp(view.lp1 - (y - m.t) / ph * (view.lp1 - view.lp0)) } };
+    ctx.textBaseline = 'middle'; ctx.font = '400 11px ' + MONO;
+
+    /* grid */
+    const pb0 = Math.exp(view.lp0) / 100, pb1 = Math.exp(view.lp1) / 100, decs = Math.log10(pb1 / pb0);
+    ctx.textAlign = 'right';
+    for (let d = Math.floor(Math.log10(pb0)) - 1; d <= Math.ceil(Math.log10(pb1)); d++) {
+      for (let k = 1; k <= 9; k++) {
+        const pb = k * Math.pow(10, d); if (pb < pb0 || pb > pb1) continue;
+        const y = fy(pb * 100), major = k === 1 || k === 2 || k === 5;
+        ctx.strokeStyle = major ? C.grid : C.grid2; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(m.l, y); ctx.lineTo(m.l + pw, y); ctx.stroke();
+        if (decs < 0.8 || major) { ctx.fillStyle = C.ink2; ctx.fillText(String(+pb.toPrecision(3)), m.l - 5, y); }
+      }
+    }
+    const hStep = niceStep((view.h1 - view.h0) / Math.max(3, pw / 66));
+    ctx.textAlign = 'center';
+    for (let h = Math.ceil(view.h0 / hStep) * hStep; h <= view.h1; h += hStep) {
+      const x = fx(h);
+      ctx.strokeStyle = C.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, m.t); ctx.lineTo(x, m.t + ph); ctx.stroke();
+      ctx.fillStyle = C.ink2; ctx.fillText(String(Math.round(h * 100) / 100), x, m.t + ph + 12);
+    }
+    ctx.fillStyle = C.ink2; ctx.font = '500 11px ' + SANS; ctx.textAlign = 'center';
+    ctx.fillText('Specific enthalpy h [kJ/kg]', m.l + pw / 2, H - 8);
+    ctx.save(); ctx.translate(10, m.t + ph / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('Absolute pressure p [bar]', 0, 0); ctx.restore();
+
+    /* data layers, clipped */
+    ctx.save(); ctx.beginPath(); ctx.rect(m.l, m.t, pw, ph); ctx.clip();
+    const path = pts => { ctx.beginPath(); for (let i = 0; i < pts.length; i++) { const x = fx(pts[i][0]), y = fy(pts[i][1]); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); } ctx.stroke(); };
+    const t = fl.tab, L = fl.lines;
+    ctx.beginPath();
+    for (let i = 0; i < t.n; i++) { const x = fx(t.hf[i]), y = fy(t.P[i]); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
+    for (let i = t.n - 1; i >= 0; i--) ctx.lineTo(fx(t.hg[i]), fy(t.P[i]));
+    ctx.closePath(); ctx.fillStyle = C.fill; ctx.fill();
+    ctx.lineJoin = 'round';
+    if (S.ly.qual) { ctx.strokeStyle = C.ink3; ctx.lineWidth = 1; ctx.setLineDash([2, 4]); L.qual.forEach(q => path(q.pts)); ctx.setLineDash([]); }
+    if (S.ly.vol) { ctx.strokeStyle = C.vol; ctx.lineWidth = 1; ctx.globalAlpha = 0.85; L.vol.forEach(v => v.segs.forEach(path)); ctx.globalAlpha = 1; }
+    if (S.ly.ent) { ctx.strokeStyle = C.ent; ctx.lineWidth = 1; ctx.globalAlpha = 0.9; L.ent.forEach(e => e.segs.forEach(path)); ctx.globalAlpha = 1; }
+    if (S.ly.iso) { ctx.strokeStyle = C.iso; ctx.lineWidth = 1; L.iso.forEach(i => path(i.pts)); }
+    ctx.strokeStyle = C.dome; ctx.lineWidth = 2;
+    ctx.beginPath(); for (let i = 0; i < t.n; i++) { const x = fx(t.hf[i]), y = fy(t.P[i]); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); } ctx.stroke();
+    ctx.beginPath(); for (let i = 0; i < t.n; i++) { const x = fx(t.hg[i]), y = fy(t.P[i]); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); } ctx.stroke();
+
+    const c = cur.cyc, sel = cur.probe && cur.probe.snap;
+    if (c) {
+      ctx.beginPath();
+      ctx.moveTo(fx(c.st4.h), fy(c.Pe)); ctx.lineTo(fx(c.st1.h), fy(c.Pe));
+      cur.comp.forEach(p => ctx.lineTo(fx(p[0]), fy(p[1])));
+      ctx.lineTo(fx(c.st3.h), fy(c.Pk)); ctx.closePath();
+      ctx.globalAlpha = 0.12; ctx.fillStyle = C.accent; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = C.accent; ctx.lineWidth = 2.4; ctx.stroke();
+      /* superheat and subcooling segments */
+      ctx.lineCap = 'round';
+      if (c.satS && c.sh > 0.05) { ctx.strokeStyle = C.sh; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(fx(c.hDewS), fy(c.Pe)); ctx.lineTo(fx(c.st1.h), fy(c.Pe)); ctx.stroke(); }
+      if (c.satK && c.sc !== null && c.sc > 0.05) { ctx.strokeStyle = C.sc; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(fx(c.hBubK), fy(c.Pk)); ctx.lineTo(fx(c.st3.h), fy(c.Pk)); ctx.stroke(); }
+      ctx.lineCap = 'butt';
+    }
+    /* probe crosshair */
+    if (cur.probe) {
+      ctx.strokeStyle = C.ink3; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+      const x = fx(cur.probe.h), y = fy(cur.probe.P);
+      ctx.beginPath(); ctx.moveTo(x, m.t); ctx.lineTo(x, m.t + ph); ctx.moveTo(m.l, y); ctx.lineTo(m.l + pw, y); ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.restore();
+    ctx.strokeStyle = C.ink3; ctx.lineWidth = 1; ctx.strokeRect(m.l + 0.5, m.t + 0.5, pw - 1, ph - 1);
+
+    /* edge labels */
+    const label = (x, y, txt, color, font, align) => {
+      ctx.font = font; ctx.textAlign = align || 'center';
+      const w = ctx.measureText(txt).width + 6;
+      const x0 = align === 'left' ? x - 3 : align === 'right' ? x - w + 3 : x - w / 2;
+      ctx.globalAlpha = 0.82; ctx.fillStyle = C.bg; ctx.fillRect(x0, y - 7, w, 14); ctx.globalAlpha = 1;
+      ctx.fillStyle = color; ctx.fillText(txt, x, y);
+    };
+    const crossLabels = (lines, segsOf, yFrac, color, fmt, gap) => {
+      const yt = m.t + ph * yFrac, out = [];
+      lines.forEach(Ln => {
+        for (const pts of segsOf(Ln)) {
+          let found = null;
+          for (let i = 0; i < pts.length - 1; i++) {
+            const y0 = fy(pts[i][1]), y1 = fy(pts[i + 1][1]);
+            if (y0 !== y1 && (y0 - yt) * (y1 - yt) <= 0) {
+              const f = (yt - y0) / (y1 - y0), x = fx(pts[i][0]) + f * (fx(pts[i + 1][0]) - fx(pts[i][0]));
+              if (x > m.l + 10 && x < m.l + pw - 10) { found = x; break; }
+            }
+          }
+          if (found !== null) { out.push({ x: found, t: fmt(Ln.val) }); break; }
+        }
+      });
+      out.sort((a, b) => a.x - b.x);
+      let last = -1e9;
+      out.forEach(o => { if (o.x - last >= gap) { label(o.x, yt, o.t, color, '500 10px ' + MONO); last = o.x; } });
+    };
+    if (S.ly.iso) crossLabels(L.iso, Ln => [Ln.pts], 0.04, C.iso, v => String(v), 26);
+    if (S.ly.ent) crossLabels(L.ent, Ln => Ln.segs, 0.96, C.ent, v => String(+v.toFixed(2)), 30);
+    if (S.ly.vol) crossLabels(L.vol, Ln => Ln.segs, 0.88, C.vol, v => String(+v.toPrecision(2)), 34);
+    if (S.ly.qual) crossLabels(L.qual, Ln => [Ln.pts], 0.66, C.ink2, v => v.toFixed(1), 28);
+
+    /* cycle markers */
+    if (c) {
+      const hollow = (h, P, col) => {
+        const x = fx(h), y = fy(P);
+        if (x < m.l || x > m.l + pw || y < m.t || y > m.t + ph) return;
+        ctx.fillStyle = C.bg; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 4.5, 0, 6.2832); ctx.fill(); ctx.stroke();
+      };
+      if (c.satS) hollow(c.hDewS, c.Pe, C.sh);
+      if (c.satK && c.sc !== null) hollow(c.hBubK, c.Pk, C.sc);
+      if (c.satK) hollow(c.satK.hg, c.Pk, C.accent);
+      if (c.satS && c.sh > 0.05) { const mx = (fx(c.hDewS) + fx(c.st1.h)) / 2; label(mx, fy(c.Pe) + 20, 'SH ' + num(c.sh, 1) + ' K', C.sh, '700 11px ' + MONO); }
+      if (c.satK && c.sc !== null && c.sc > 0.05) { const mx = (fx(c.hBubK) + fx(c.st3.h)) / 2; label(mx, fy(c.Pk) - 20, 'SC ' + num(c.sc, 1) + ' K', C.sc, '700 11px ' + MONO); }
+      const bw = (x, y, k, on) => {
+        if (on) {
+          ctx.fillStyle = C.accent; ctx.globalAlpha = 0.18; ctx.beginPath(); ctx.arc(x, y, 26, 0, 6.2832); ctx.fill(); ctx.globalAlpha = 1;
+          ctx.strokeStyle = C.ink; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, 17, 0, 6.2832); ctx.stroke();
+        }
+        ctx.fillStyle = C.accent; ctx.beginPath(); ctx.arc(x, y, on ? 13 : 11, 0, 6.2832); ctx.fill();
+        ctx.strokeStyle = C.bg; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = C.accentInk; ctx.font = '700 12px ' + MONO; ctx.textAlign = 'center'; ctx.fillText(k, x, y + 0.5);
+      };
+      cur.pts.forEach(p => { if (p.k !== sel) bw(fx(p.st.h), fy(p.P), p.k, false); });
+      cur.pts.forEach(p => { if (p.k === sel) bw(fx(p.st.h), fy(p.P), p.k, true); });
+      if (W >= 560) {
+        ctx.font = '600 11px ' + SANS;
+        const off = { '1': [16, 18], '2': [16, -16], '3': [-16, -16], '4': [-16, 18] };
+        cur.pts.forEach(p => {
+          const x = fx(p.st.h), y = fy(p.P), o = off[p.k];
+          label(x + o[0], y + o[1], p.name + ' ' + num(C2(p.st.T), 1) + ' \u00B0C', C.accent, '600 11px ' + SANS, o[0] > 0 ? 'left' : 'right');
+        });
+      }
+    }
+    if (cur.probe && !cur.probe.snap) {
+      const x = fx(cur.probe.h), y = fy(cur.probe.P);
+      ctx.strokeStyle = C.ink; ctx.lineWidth = 2; ctx.fillStyle = C.bg; ctx.beginPath(); ctx.arc(x, y, 6, 0, 6.2832); ctx.fill(); ctx.stroke();
+    }
+    ctx.font = 'italic 400 11px ' + SANS; ctx.fillStyle = C.ink3; ctx.textAlign = 'center';
+    const mid = Math.floor(t.n * 0.5), lo = Math.floor(t.n * 0.12);
+    [['Liquid', (t.hf[mid] + view.h0) / 2, fl.Pc * 0.5], ['Two-phase', (t.hf[lo] + t.hg[lo]) / 2, t.P[lo] * 1.35], ['Vapour', (t.hg[mid] + view.h1) / 2, t.P[lo] * 1.8]].forEach(r => {
+      const x = fx(r[1]), y = fy(r[2]);
+      if (x > m.l + 30 && x < m.l + pw - 30 && y > m.t + 14 && y < m.t + ph - 14) ctx.fillText(r[0], x, y);
+    });
+    if (!o) updateReadout();
+  }
+  function schedule() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); }
+
+  /* ---------- pointer interaction ---------- */
+  function bindPointer() {
+    const cv = $('cv'), ptrs = new Map();
+    const HOLD = 380, TOL = 9;
+    let g = null, timer = 0;
+    const pos = e => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+    const isTouch = e => e.pointerType && e.pointerType !== 'mouse';
+    const rad = e => isTouch(e) ? 28 : 16;
+    cv.addEventListener('contextmenu', e => e.preventDefault());
+    cv.addEventListener('pointerdown', e => {
+      const p = pos(e); ptrs.set(e.pointerId, p);
+      try { cv.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      clearTimeout(timer);
+      if (ptrs.size === 1) {
+        g = { x: p.x, y: p.y, cur: p, mode: 'wait', v0: Object.assign({}, view), touch: isTouch(e), r: rad(e) };
+        if (g.touch) timer = setTimeout(() => {
+          if (g && g.mode === 'wait') {
+            g.mode = 'probe';
+            try { if (navigator.vibrate) navigator.vibrate(12); } catch (err) { /* ignore */ }
+            if (setProbe(g.cur, true, g.r)) { syncSel(); schedule(); }
+          }
+        }, HOLD);
+      } else if (ptrs.size === 2) {
+        const a = Array.from(ptrs.values());
+        g = { mode: 'zoom', d0: Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1, mx: (a[0].x + a[1].x) / 2, my: (a[0].y + a[1].y) / 2, v0: Object.assign({}, view) };
+      }
+    });
+    cv.addEventListener('pointermove', e => {
+      if (!geo) return;
+      const p = pos(e);
+      if (!ptrs.has(e.pointerId)) {
+        if (!isTouch(e) && !cur.sticky) { if (!setProbe(p, false, rad(e))) cur.probe = null; syncSel(); schedule(); }
+        return;
+      }
+      ptrs.set(e.pointerId, p);
+      if (!g) return;
+      g.cur = p;
+      if (g.mode === 'probe') { if (setProbe(p, true, g.r)) { syncSel(); schedule(); } return; }
+      const sh = g.v0.h1 - g.v0.h0, sl = g.v0.lp1 - g.v0.lp0;
+      if (g.mode === 'wait' && Math.abs(p.x - g.x) + Math.abs(p.y - g.y) > TOL) { clearTimeout(timer); g.mode = 'pan'; }
+      if (g.mode === 'pan') {
+        const dh = -(p.x - g.x) / geo.pw * sh, dl = (p.y - g.y) / geo.ph * sl;
+        view = clampView({ h0: g.v0.h0 + dh, h1: g.v0.h1 + dh, lp0: g.v0.lp0 + dl, lp1: g.v0.lp1 + dl }); schedule();
+      } else if (g.mode === 'zoom' && ptrs.size === 2) {
+        const a = Array.from(ptrs.values());
+        const d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1, f = g.d0 / d, mx = (a[0].x + a[1].x) / 2, my = (a[0].y + a[1].y) / 2;
+        const ah = g.v0.h0 + (g.mx - geo.m.l) / geo.pw * sh, al = g.v0.lp1 - (g.my - geo.m.t) / geo.ph * sl;
+        const nh = sh * f, nl = sl * f, h0 = ah - (mx - geo.m.l) / geo.pw * nh, lp1 = al + (my - geo.m.t) / geo.ph * nl;
+        view = clampView({ h0, h1: h0 + nh, lp0: lp1 - nl, lp1 }); schedule();
+      }
+    });
+    const end = e => {
+      clearTimeout(timer);
+      const p = pos(e);
+      if (g && g.mode === 'wait' && e.type === 'pointerup' && ptrs.size === 1) {
+        if (!setProbe(p, true, g.r)) { cur.probe = null; cur.sticky = false; }
+        syncSel(); schedule();
+      }
+      ptrs.delete(e.pointerId);
+      if (ptrs.size === 1) { const q = Array.from(ptrs.values())[0]; g = { x: q.x, y: q.y, cur: q, mode: 'pan', v0: Object.assign({}, view), touch: true, r: 28 }; }
+      else if (ptrs.size === 0) g = null;
+    };
+    cv.addEventListener('pointerup', end);
+    cv.addEventListener('pointercancel', end);
+    cv.addEventListener('pointerleave', e => { if (!isTouch(e) && ptrs.size === 0 && !cur.sticky) { cur.probe = null; syncSel(); schedule(); } });
+    cv.addEventListener('wheel', e => {
+      if (!geo) return; e.preventDefault();
+      const p = pos(e);
+      if (p.x < geo.m.l || p.x > geo.m.l + geo.pw || p.y < geo.m.t || p.y > geo.m.t + geo.ph) return;
+      const f = Math.exp(e.deltaY * 0.0015), ah = geo.inv.h(p.x), al = Math.log(geo.inv.P(p.y)), fh = (p.x - geo.m.l) / geo.pw, fl2 = (p.y - geo.m.t) / geo.ph;
+      const nh = (view.h1 - view.h0) * f, nl = (view.lp1 - view.lp0) * f;
+      view = clampView({ h0: ah - fh * nh, h1: ah - fh * nh + nh, lp1: al + fl2 * nl, lp0: al + fl2 * nl - nl }); schedule();
+    }, { passive: false });
+    cv.addEventListener('dblclick', () => { fitView(); schedule(); });
+  }
+
+  /* ---------- PDF report ---------- */
+  let dl = null;
+  const LIGHT = { bg: '#FFFFFF', ink: '#132028', ink2: '#455662', ink3: '#75848F', grid: '#D9E0E4', grid2: '#EAEFF1', iso: '#2F6FA8', ent: '#148A7B', vol: '#94700F', dome: '#132028', fill: 'rgba(47, 111, 168, 0.08)', accent: '#C0205A', accentInk: '#FFFFFF', sh: '#C45A00', sc: '#6B4BC8' };
+  function chartJpeg() {
+    const sv = view, sg = geo, sp = cur.probe, cv = document.createElement('canvas');
+    try {
+      resetView(); const rv = view; view = rv; cur.probe = null;
+      draw({ cv, W: 1000, H: 600, dpr: 2, C: LIGHT });
+    } finally { view = sv; geo = sg; cur.probe = sp; }
+    const bin = atob(cv.toDataURL('image/jpeg', 0.92).split(',')[1]), a = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+    return { bytes: a, w: cv.width, h: cv.height };
+  }
+  function makePdf() {
+    const PW = 595.28, PH = 841.89, pages = [];
+    let cs = null, img = null;
+    const WIN = { '\u2082': '2', '°': '\xB0', '²': '\xB2', '³': '\xB3', '·': '\xB7', '–': '\x96', '—': '\x97', '’': '\x92', '×': '\xD7', '−': '-', '…': '\x85' };
+    const wa = s => String(s).replace(/[^\x00-\x7F\xA0-\xFF]/g, ch => WIN[ch] || '?');
+    const esc = s => s.replace(/([\\()])/g, '\\$1');
+    const mctx = document.createElement('canvas').getContext('2d');
+    const tw = (s, size, bold, ital) => { mctx.font = (ital ? 'italic ' : '') + (bold ? '700 ' : '400 ') + size + 'px Arial, Helvetica, sans-serif'; return mctx.measureText(s).width; };
+    const rgb = h => { const n = parseInt(h.slice(1), 16); return ((n >> 16) / 255).toFixed(3) + ' ' + (((n >> 8) & 255) / 255).toFixed(3) + ' ' + ((n & 255) / 255).toFixed(3); };
+    const enc = s => { const a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 255; return a; };
+    const d = {
+      PW, PH,
+      page() { cs = []; pages.push(cs); },
+      count() { return pages.length; },
+      on(i) { cs = pages[i]; },
+      width: tw,
+      text(s, x, y, o) {
+        o = o || {};
+        const size = o.size || 10, f = o.bold ? 'F2' : o.italic ? 'F3' : 'F1', w = tw(s, size, o.bold, o.italic);
+        if (o.align === 'r') x -= w; else if (o.align === 'c') x -= w / 2;
+        cs.push('BT ' + rgb(o.color || '#132028') + ' rg /' + f + ' ' + size + ' Tf ' + x.toFixed(2) + ' ' + (PH - y).toFixed(2) + ' Td (' + esc(wa(s)) + ') Tj ET');
+        return w;
+      },
+      rect(x, y, w, h, o) {
+        o = o || {};
+        cs.push((o.fill ? rgb(o.fill) + ' rg ' : '') + (o.stroke ? rgb(o.stroke) + ' RG ' + (o.lw || 1) + ' w ' : '') + x.toFixed(2) + ' ' + (PH - y - h).toFixed(2) + ' ' + w.toFixed(2) + ' ' + h.toFixed(2) + ' re ' + (o.fill && o.stroke ? 'B' : o.fill ? 'f' : 'S'));
+      },
+      line(x1, y1, x2, y2, color, lw) { cs.push(rgb(color) + ' RG ' + (lw || 0.5) + ' w ' + x1.toFixed(2) + ' ' + (PH - y1).toFixed(2) + ' m ' + x2.toFixed(2) + ' ' + (PH - y2).toFixed(2) + ' l S'); },
+      image(j, x, y, w, h) { img = j; cs.push('q ' + w.toFixed(2) + ' 0 0 ' + h.toFixed(2) + ' ' + x.toFixed(2) + ' ' + (PH - y - h).toFixed(2) + ' cm /Im1 Do Q'); },
+      finish(title) {
+        const chunks = [], offs = [];
+        let len = 0;
+        const push = b => { chunks.push(b); len += b.length; };
+        const put = (id, str) => { offs[id] = len; push(enc(id + ' 0 obj\n' + str + '\nendobj\n')); };
+        const putStream = (id, dict, bytes) => { offs[id] = len; push(enc(id + ' 0 obj\n<< ' + dict + ' /Length ' + bytes.length + ' >>\nstream\n')); push(bytes); push(enc('\nendstream\nendobj\n')); };
+        push(enc('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n'));
+        const kids = [], first = 8;
+        pages.forEach((_, i) => kids.push((first + i * 2 + 1) + ' 0 R'));
+        put(1, '<< /Type /Catalog /Pages 2 0 R >>');
+        put(2, '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>');
+        put(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+        put(4, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+        put(5, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding /WinAnsiEncoding >>');
+        if (img) putStream(6, '/Type /XObject /Subtype /Image /Width ' + img.w + ' /Height ' + img.h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode', img.bytes);
+        else put(6, '<< >>');
+        const n = new Date(), p2 = v => String(v).padStart(2, '0');
+        put(7, '<< /Title (' + esc(wa(title)) + ') /Producer (Mollier Desk) /CreationDate (D:' + n.getFullYear() + p2(n.getMonth() + 1) + p2(n.getDate()) + p2(n.getHours()) + p2(n.getMinutes()) + p2(n.getSeconds()) + ') >>');
+        pages.forEach((p, i) => {
+          const cid = first + i * 2, pid = cid + 1;
+          putStream(cid, '', enc(p.join('\n')));
+          put(pid, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + PW + ' ' + PH + '] /Contents ' + cid + ' 0 R /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> /XObject << /Im1 6 0 R >> >> >>');
+        });
+        const total = first + pages.length * 2;
+        const xrefAt = len;
+        let x = 'xref\n0 ' + total + '\n0000000000 65535 f \n';
+        for (let i = 1; i < total; i++) x += String(offs[i]).padStart(10, '0') + ' 00000 n \n';
+        push(enc(x + 'trailer\n<< /Size ' + total + ' /Root 1 0 R /Info 7 0 R >>\nstartxref\n' + xrefAt + '\n%%EOF\n'));
+        const out = new Uint8Array(len); let o = 0;
+        chunks.forEach(b => { out.set(b, o); o += b.length; });
+        return out;
+      }
+    };
+    return d;
+  }
+  function buildReport() {
+    const c = cur.cyc, fl = cur.fl, pu = PU[S.pu], now = new Date(), gl = c.glide >= 1;
+    const d = makePdf(), L = 40, R = d.PW - 40, CW = R - L;
+    const fit = (s, w, size, bold) => { s = String(s); if (d.width(s, size, bold) <= w) return s; while (s.length > 1 && d.width(s + '…', size, bold) > w) s = s.slice(0, -1); return s + '…'; };
+    const wrap = (s, w, size) => {
+      const out = [];
+      String(s).split(/\n/).forEach(par => {
+        let line = '';
+        par.split(/\s+/).filter(Boolean).forEach(word => { const t = line ? line + ' ' + word : word; if (d.width(t, size) <= w) line = t; else { if (line) out.push(line); line = word; } });
+        out.push(line);
+      });
+      return out;
+    };
+    const table = (y, cols, rows) => {
+      let x = L;
+      cols.forEach(cl => { cl.x = x; x += cl.w; });
+      d.rect(L, y - 11, CW, 17, { fill: '#EAEFF1' });
+      cols.forEach(cl => d.text(cl.h, cl.align === 'r' ? cl.x + cl.w - 6 : cl.x + 6, y + 1, { size: 8, bold: true, color: '#455662', align: cl.align === 'r' ? 'r' : 'l' }));
+      y += 17;
+      rows.forEach(r => {
+        r.forEach((v, i) => { const cl = cols[i]; d.text(fit(v, cl.w - 12, 9.5), cl.align === 'r' ? cl.x + cl.w - 6 : cl.x + 6, y + 4, { size: 9.5, align: cl.align === 'r' ? 'r' : 'l' }); });
+        d.line(L, y + 10, R, y + 10, '#D9E0E4', 0.5);
+        y += 19;
+      });
+      return y;
+    };
+    const head = (s, y) => { d.text(s.toUpperCase(), L, y, { size: 9, bold: true, color: '#455662' }); return y + 8; };
+
+    /* page 1 */
+    d.page();
+    d.rect(0, 0, d.PW, 72, { fill: '#132028' });
+    d.text('Refrigeration system report', L, 38, { size: 21, bold: true, color: '#FFFFFF' });
+    d.text('Pressure and temperature readings analysed on a pressure-enthalpy basis', L, 56, { size: 9.5, color: '#A3B3BE' });
+    d.text('Mollier Desk', R, 38, { size: 11, bold: true, color: '#FFFFFF', align: 'r' });
+    d.text(now.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }), R, 56, { size: 9.5, color: '#A3B3BE', align: 'r' });
+    let y = 100;
+    const det = [['Site or job', S.site || '—'], ['Engineer', S.eng || '—'], ['Refrigerant', fl.name], ['Gauge unit', pu.l]];
+    const dw = [215, 120, 100, 80];
+    let dx = L;
+    det.forEach((p, i) => {
+      d.text(p[0].toUpperCase(), dx, y, { size: 7.5, bold: true, color: '#75848F' });
+      d.text(fit(p[1], dw[i] - 10, 11.5, true), dx, y + 15, { size: 11.5, bold: true });
+      dx += dw[i];
+    });
+    y += 38;
+    const fnote = fl.note + (gl ? '. Glide about ' + fl.glide + ' K, so superheat uses the dew point and subcooling the bubble point.' : '');
+    wrap(fnote, CW, 8.5).slice(0, 2).forEach(l => { d.text(l, L, y, { size: 8.5, color: '#455662' }); y += 11.5; });
+    y += 12;
+
+    const tw3 = (CW - 20) / 3;
+    const tiles = [
+      ['SUPERHEAT', num(c.sh, 1) + ' K', '#C45A00', 'Suction ' + num(S.Ts, 1) + ' °C, ' + (gl ? 'dew point ' : 'saturated ') + num(C2(c.Tevap), 1) + ' °C'],
+      ['SUBCOOLING', c.sc === null ? '—' : num(c.sc, 1) + ' K', '#6B4BC8', c.sc === null ? 'Above the critical pressure' : 'Liquid line ' + num(S.T3, 1) + ' °C, ' + (gl ? 'bubble point ' : 'saturated ') + num(C2(c.Tbub), 1) + ' °C'],
+      ['COP (COOLING)', num(c.cop, 2), '#C0205A', 'Heating COP ' + num(c.copH, 2)]
+    ];
+    tiles.forEach((t, i) => {
+      const x = L + i * (tw3 + 10);
+      d.rect(x, y, tw3, 76, { stroke: t[2], lw: 1.6 });
+      d.text(t[0], x + 10, y + 16, { size: 7.5, bold: true, color: '#455662' });
+      d.text(t[1], x + 10, y + 46, { size: 27, bold: true, color: t[2] });
+      d.text(fit(t[3], tw3 - 20, 8), x + 10, y + 64, { size: 8, color: '#455662' });
+    });
+    y += 104;
+
+    y = head('Measured readings', y) + 14;
+    const sat = c.satK !== null;
+    y = table(y, [
+      { h: 'READING', w: 125 }, { h: 'PRESSURE ' + pu.l.toUpperCase(), w: 95, align: 'r' }, { h: 'ABSOLUTE BAR A', w: 90, align: 'r' }, { h: 'TEMP °C', w: 80, align: 'r' }, { h: gl ? 'DEW / BUBBLE °C' : 'SATURATION °C', w: 125, align: 'r' }
+    ], [
+      ['Suction', pSel(c.Pe), barA(c.Pe), num(S.Ts, 1), num(C2(c.Tevap), 1) + (gl ? ' dew' : '')],
+      ['Discharge', pSel(c.Pk), barA(c.Pk), num(S.Td, 1), sat ? num(C2(c.Tcond), 1) + (gl ? ' dew' : '') : '—'],
+      ['Liquid line', pSel(c.Pk), barA(c.Pk), num(S.T3, 1), sat ? num(C2(c.Tbub), 1) + (gl ? ' bubble' : '') : '—']
+    ]) + 18;
+
+    y = head('Calculated results', y) + 14;
+    const res = [
+      ['Superheat', num(c.sh, 1) + ' K'], ['Subcooling', c.sc === null ? '—' : num(c.sc, 1) + ' K'],
+      [gl ? 'Evaporating temperature (dew)' : 'Evaporating temperature', num(C2(c.Tevap), 1) + ' °C'], [gl ? 'Condensing temperature (dew)' : 'Condensing temperature', c.Tcond === null ? '—' : num(C2(c.Tcond), 1) + ' °C'],
+      ['Discharge above saturation', c.dsh === null ? '—' : num(c.dsh, 1) + ' K'], ['Pressure ratio', num(c.pr, 2)],
+      ['Isentropic efficiency', num(c.eta * 100, 1) + ' %'], ['COP (cooling)', num(c.cop, 2)],
+      ['Cooling effect', num(c.qe, 1) + ' kJ/kg'], ['COP (heating)', num(c.copH, 2)],
+      ['Compressor work', num(c.w, 1) + ' kJ/kg'], ['Heat rejected', num(c.qc, 1) + ' kJ/kg']
+    ];
+    const half = CW / 2 - 12;
+    res.forEach((r, i) => {
+      const col = i % 2, row = Math.floor(i / 2), x = L + col * (CW / 2 + 12), yy = y + row * 19;
+      d.text(r[0], x, yy + 4, { size: 9.5, color: '#455662' });
+      d.text(r[1], x + half, yy + 4, { size: 9.5, bold: true, align: 'r' });
+      d.line(x, yy + 10, x + half, yy + 10, '#D9E0E4', 0.5);
+    });
+    y += Math.ceil(res.length / 2) * 19 + 18;
+    if (S.notes && S.notes.trim()) {
+      y = head('Notes', y) + 14;
+      wrap(S.notes.trim(), CW, 9.5).slice(0, 14).forEach(l => { d.text(l, L, y, { size: 9.5 }); y += 13; });
+    }
+
+    /* page 2 */
+    d.page();
+    y = 56;
+    y = head('Pressure-enthalpy chart', y) + 10;
+    const j = chartJpeg(), ih = CW * j.h / j.w;
+    d.image(j, L, y, CW, ih);
+    d.rect(L, y, CW, ih, { stroke: '#CFD7DC', lw: 0.7 });
+    y += ih + 14;
+    d.text('1 suction, 2 discharge, 3 liquid line, 4 after the expansion valve (calculated at constant enthalpy). Orange bar: superheat. Violet bar: subcooling.', L, y, { size: 8, italic: true, color: '#455662' });
+    y += 28;
+    y = head('Cycle points', y) + 14;
+    y = table(y, [
+      { h: 'Point', w: 120 }, { h: 'p ' + pu.l, w: 60, align: 'r' }, { h: 'T \u00B0C', w: 50, align: 'r' }, { h: 'h kJ/kg', w: 60, align: 'r' }, { h: 's kJ/kg\u00B7K', w: 70, align: 'r' }, { h: 'v m\u00B3/kg', w: 65, align: 'r' }, { h: 'State', w: 90 }
+    ], cur.pts.map(p => [p.k + '  ' + p.name + (p.meas ? '' : ' (calc.)'), pSel(p.P), num(C2(p.st.T), 1), num(p.st.h, 1), num(p.st.s, 3), vFmt(p.st.v), phaseName(p.st)])) + 18;
+    y = head('Method and limits', y) + 12;
+    const meth = 'Superheat is suction temperature minus the saturation (dew) temperature at suction pressure. Subcooling is the saturation (bubble) temperature at discharge pressure minus liquid line temperature. Enthalpy and entropy are taken from the measured pressure and temperature at each point, and the expansion valve is treated as a constant-enthalpy throttle. COP is the cooling effect divided by compressor work, using measured discharge conditions. Heat lost from the compressor shell and pipework is not included. Reference state: ' + (S.ref === 'ASHRAE' ? 'ASHRAE (h = 0, s = 0 for saturated liquid at -40 °C)' : 'IIR (h = 200 kJ/kg, s = 1.0 kJ/kg·K for saturated liquid at 0 °C)') + '.\n' +
+      'Fluid properties come from a fitted Peng-Robinson equation of state, not from REFPROP or CoolProp. Expect vapour pressures within about 1 to 2 %, and about 5 % for blends, with enthalpy differences a few percent out. Blends are treated as single fluids with a typical temperature glide. Use this report for service records and comparison, and confirm design-critical figures with reference software or the compressor manufacturer.';
+    wrap(meth, CW, 8.5).forEach(l => { d.text(l, L, y, { size: 8.5, color: '#455662' }); y += 11.5; });
+
+    const n = d.count();
+    for (let i = 0; i < n; i++) {
+      d.on(i);
+      d.line(L, d.PH - 42, R, d.PH - 42, '#CFD7DC', 0.5);
+      d.text('Mollier Desk  ·  ' + fl.name + (S.site ? '  ·  ' + S.site : ''), L, d.PH - 28, { size: 8, color: '#75848F' });
+      d.text('Page ' + (i + 1) + ' of ' + n, R, d.PH - 28, { size: 8, color: '#75848F', align: 'r' });
+    }
+    return d.finish('Refrigeration system report ' + fl.name);
+  }
+  function pdfMsg(t) { $('pdfMsg').textContent = t || ''; }
+  async function makeReport() {
+    if (!dl) return;
+    if (!cur.cyc) { pdfMsg('Enter valid readings first so there is a cycle to report.'); return; }
+    pdfMsg('Building the report…');
+    try {
+      const bytes = buildReport();
+      const safe = (cur.fl.name || 'report').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const day = new Date(), p2 = v => String(v).padStart(2, '0');
+      const r = await dl.save({ filename: 'Mollier-Desk-' + safe + '-' + day.getFullYear() + '-' + p2(day.getMonth() + 1) + '-' + p2(day.getDate()) + '.pdf', data: bytes });
+      pdfMsg(r && r.status === 'delivered' ? 'Report delivered.' : 'Report saved.');
+    } catch (e) {
+      const code = e && e.code;
+      pdfMsg(code === 'declined' ? 'Save cancelled.' : code === 'rate_limited' ? 'A save prompt is already open. Answer it, then try again.' : 'The PDF could not be saved' + (e && e.message ? ': ' + e.message : '.'));
+    }
+  }
+  function initPdf() {
+    ['btnPdf', 'btnPdf2'].forEach(id => $(id).addEventListener('click', makeReport));
+    ['inpSite', 'inpEng', 'inpNotes'].forEach(id => $(id).addEventListener('input', () => { S[{ inpSite: 'site', inpEng: 'eng', inpNotes: 'notes' }[id]] = $(id).value; save(); }));
+    try {
+      if (window.claude && window.claude.use) window.claude.use('downloads').then(x => { dl = x; $('pdfGrp').hidden = !x; $('btnPdf2').hidden = !x; }, () => { /* unavailable */ });
+ } catch (e) { /* unavailable */ }
+    if (!(window.claude && window.claude.use)) {
+      dl = {
+        save: async r => {
+          const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
+          const a = document.createElement('a'); a.href = url; a.download = r.filename; document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 4000);
+          return { status: 'saved' };
+        }
+      };
+      $('pdfGrp').hidden = false; $('btnPdf2').hidden = false;
+    }
+  }
+
+  /* ---------- start ---------- */
+  function init() {
+    bindInputs();
+    initPdf();
+    selectFluid(S.fluid);
+    syncInputs();
+    bindPointer();
+    recompute(true);
+    try { new ResizeObserver(() => draw()).observe($('cvWrap')); } catch (e) { window.addEventListener('resize', draw); }
+    try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw); } catch (e) { /* ignore */ }
+    try { new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] }); } catch (e) { /* ignore */ }
+    try { document.fonts.ready.then(draw); } catch (e) { /* ignore */ }
+  }
+  init();
+})();
+
+</script>
+</body>
+</html>
