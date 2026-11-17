@@ -61,6 +61,9 @@ select:focus-visible, input:focus-visible, button:focus-visible, .chip input:foc
 .controls { grid-area: controls; padding: 14px; display: grid; gap: 16px; align-content: start; }
 .grp { display: grid; gap: 10px; }
 .meta { margin: 0; font-size: 12px; color: var(--ink-2); }
+.eng { margin: 0; font-size: 11px; font-family: var(--f-mono); padding: 3px 8px; border-radius: 999px; display: inline-block; border: 1px solid var(--line, currentColor); color: var(--ink-2); }
+.eng.ok { color: var(--c-sc); }
+.eng.bad { color: var(--c-sh); }
 .warnnote { margin: 0; font-size: 12px; color: var(--ink-2); border-left: 3px solid var(--c-vol); padding-left: 8px; }
 .pt { display: grid; gap: 6px; }
 .pt > b { font: 600 13px var(--f-body); }
@@ -157,6 +160,7 @@ details p { margin: 8px 0 0; max-width: 78ch; }
         <select id="fluidSel" aria-label="Refrigerant"></select>
         <p class="meta" id="fluidMeta"></p>
         <p class="warnnote" id="fluidWarn" hidden></p>
+        <p class="eng warn" id="engBadge" hidden></p>
       </div>
 
       <div class="grp">
@@ -259,12 +263,11 @@ details p { margin: 8px 0 0; max-width: 78ch; }
     </div>
   </div>
 </div>
-
 <script>
 /* Thermodynamic engine: Peng-Robinson EOS (Mathias-Copeman alpha fitted to two
    vapour-pressure points per fluid), Peneloux volume shift, linear ideal-gas cp.
    Units: T [K], P [kPa], h [kJ/kg], s [kJ/kg/K], v [m3/kg]. */
-const MD = (function () {
+const BI = (function () {
   const RU = 8.314462618, SQ2 = Math.SQRT2, P0 = 100;
 
   const DEFS = [
@@ -723,6 +726,317 @@ const MD = (function () {
   return { DEFS, build, get, props, satP, satAtP, tsatExact, stateAtPH, stateAtPS, stateAtPT, cycle, cycleFromPoints, compressionPath, buildLines };
 })();
 
+/* CoolProp adapter. Uses Module.PropsSI(out, in1, v1, in2, v2, fluid) in SI units
+   (Pa, K, J/kg, J/kg/K, kg/m3) and presents the same interface as the built-in engine.
+   Units here: T [K], P [kPa], h [kJ/kg], s [kJ/kg/K], v [m3/kg]. */
+const CPE = (function (BI) {
+  'use strict';
+  let API = null;
+  function setAPI(f) { API = f; }
+  const NAMES = {
+    R134a: 'R134a', R1234yf: 'R1234yf', R1234ze: 'R1234ze(E)', R32: 'R32', R125: 'R125', R143a: 'R143a', R152a: 'R152A', R23: 'R23',
+    R245fa: 'R245fa', R1233zd: 'R1233zd(E)', R22: 'R22', R600: 'n-Butane', R600a: 'IsoButane', R290: 'Propane', R1270: 'Propylene',
+    R170: 'Ethane', R717: 'Ammonia', R744: 'CO2', R404A: 'R404A.mix', R407C: 'R407C.mix', R410A: 'R410A.mix', R507A: 'R507A.mix'
+  };
+  const CPN = { R32: 'R32', R125: 'R125', R134a: 'R134a', R1234yf: 'R1234yf', R1234ze: 'R1234ze(E)' };
+  const MIXES = {
+    R448A: { R32: 26, R125: 26, R1234yf: 20, R134a: 21, R1234ze: 7 },
+    R449A: { R32: 24.3, R125: 24.7, R1234yf: 25.3, R134a: 25.7 },
+    R452A: { R32: 11, R125: 59, R1234yf: 30 },
+    R454B: { R32: 68.9, R1234yf: 31.1 },
+    R513A: { R1234yf: 56, R134a: 44 }
+  };
+  const cache = {};
+  const q = (out, k1, v1, k2, v2, f) => {
+    const r = API(out, k1, v1, k2, v2, f);
+    if (typeof r !== 'number' || !isFinite(r) || Math.abs(r) > 1e300) throw new Error('CoolProp could not work out ' + out + ' for ' + f);
+    return r;
+  };
+  function mixString(id) {
+    const m = MIXES[id], ks = Object.keys(m);
+    const mol = ks.map(k => m[k] / BI.DEFS.find(d => d.id === k).M), tot = mol.reduce((a, b) => a + b, 0);
+    return 'HEOS::' + ks.map((k, i) => CPN[k] + '[' + (mol[i] / tot).toFixed(6) + ']').join('&');
+  }
+  const supports = id => !!(NAMES[id] || MIXES[id]);
+
+  /* ---------- fluid setup ---------- */
+  function setRef(fl, mode) {
+    fl.hOff = 0; fl.sOff = 0;
+    const Tr = mode === 'ASHRAE' ? 233.15 : 273.15;
+    const h0 = q('H', 'T', Tr, 'Q', 0, fl.cpName) / 1000, s0 = q('S', 'T', Tr, 'Q', 0, fl.cpName) / 1000;
+    fl.hOff = (mode === 'ASHRAE' ? 0 : 200) - h0;
+    fl.sOff = (mode === 'ASHRAE' ? 0 : 1) - s0;
+    fl.refMode = mode; fl.lines = null;
+    buildTable(fl);
+  }
+  function sat(fl, P) {
+    if (!(P < fl.Pc * 0.9999)) return null;
+    const Pa = P * 1000, f = fl.cpName, ho = fl.hOff, so = fl.sOff;
+    return {
+      P, Tb: q('T', 'P', Pa, 'Q', 0, f), Td: q('T', 'P', Pa, 'Q', 1, f),
+      hf: q('H', 'P', Pa, 'Q', 0, f) / 1000 + ho, hg: q('H', 'P', Pa, 'Q', 1, f) / 1000 + ho,
+      sf: q('S', 'P', Pa, 'Q', 0, f) / 1000 + so, sg: q('S', 'P', Pa, 'Q', 1, f) / 1000 + so,
+      vf: 1 / q('D', 'P', Pa, 'Q', 0, f), vg: 1 / q('D', 'P', Pa, 'Q', 1, f)
+    };
+  }
+  function buildTable(fl) {
+    const f = fl.cpName, N = 200;
+    const Pmin = q('P', 'T', fl.tmin, 'Q', 0, f) / 1000, Ptop = fl.Pc * 0.9992;
+    const T = [], P = [], hf = [], hg = [], sf = [], sg = [], vf = [], vg = [];
+    for (let i = 0; i < N; i++) {
+      const u = 1 - Math.pow(1 - i / (N - 1), 2), p = Math.exp(Math.log(Pmin) + (Math.log(Ptop) - Math.log(Pmin)) * u);
+      const s = sat(fl, p);
+      T.push(s.Tb); P.push(p); hf.push(s.hf); hg.push(s.hg); sf.push(s.sf); sg.push(s.sg); vf.push(s.vf); vg.push(s.vg);
+    }
+    const hc = (hf[N - 1] + hg[N - 1]) / 2;
+    T.push(fl.Tc); P.push(fl.Pc); hf.push(hc); hg.push(hc); sf.push((sf[N - 1] + sg[N - 1]) / 2); sg.push((sf[N - 1] + sg[N - 1]) / 2); vf.push((vf[N - 1] + vg[N - 1]) / 2); vg.push((vf[N - 1] + vg[N - 1]) / 2);
+    fl.tab = { n: T.length, T, P, hf, hg, sf, sg, vf, vg, lnP: P.map(Math.log) };
+    const Pmax = fl.Pc * 1.5, Pl = P[0] * 0.85;
+    const hL = q('H', 'T', fl.tmin, 'P', Pmax * 1000, f) / 1000 + fl.hOff;
+    const hV = q('H', 'T', fl.Tc + 60, 'P', Pl * 1000, f) / 1000 + fl.hOff;
+    fl.view = { Pmin: Pl, Pmax, h0: Math.floor((Math.min(hL, hf[0]) - 12) / 10) * 10, h1: Math.ceil(hV / 10) * 10 };
+  }
+  function build(id, ref) {
+    const base = BI.DEFS.find(d => d.id === id);
+    if (!base || !supports(id)) throw new Error('No CoolProp name for ' + id);
+    const fl = Object.assign({}, base);
+    fl.viaCP = true; fl.cpName = NAMES[id] || mixString(id); fl.est = false; fl.engine = 'CoolProp';
+    fl.Tc = q('Tcrit', '', 0, '', 0, fl.cpName); fl.Pc = q('Pcrit', '', 0, '', 0, fl.cpName) / 1000;
+    let tmin = base.tmin;
+    try { tmin = Math.max(tmin, q('Tmin', '', 0, '', 0, fl.cpName) + 1); } catch (e) { /* keep table value */ }
+    fl.tmin = tmin;
+    fl.note = base.note.replace(/^Blend.*$/, 'Blend, CoolProp mixture model, with real dew and bubble points');
+    setRef(fl, ref);
+    return fl;
+  }
+  function get(id, ref) {
+    if (!cache[id]) cache[id] = build(id, ref);
+    const fl = cache[id];
+    if (fl.refMode !== ref) setRef(fl, ref);
+    return fl;
+  }
+
+  /* ---------- states ---------- */
+  function stateTP(fl, T, P, phase) {
+    const f = fl.cpName, Pa = P * 1000;
+    return { T, P, phase, h: q('H', 'T', T, 'P', Pa, f) / 1000 + fl.hOff, s: q('S', 'T', T, 'P', Pa, f) / 1000 + fl.sOff, v: 1 / q('D', 'T', T, 'P', Pa, f) };
+  }
+  function stateAt(fl, P, key, val, s0) {
+    const f = fl.cpName, Pa = P * 1000, out = key === 'h' ? 'H' : 'S', off = key === 'h' ? fl.hOff : fl.sOff;
+    const raw = (val - off) * 1000, sub = P < fl.Pc * 0.9999, sa = sub ? (s0 || sat(fl, P)) : null;
+    if (sa) {
+      const lo = sa[key + 'f'], hi = sa[key + 'g'];
+      if (val >= lo && val <= hi) {
+        const x = (val - lo) / (hi - lo);
+        return {
+          phase: '2ph', x, P, T: sa.Tb + (sa.Td - sa.Tb) * x, h: sa.hf + x * (sa.hg - sa.hf), s: sa.sf + x * (sa.sg - sa.sf), v: sa.vf + x * (sa.vg - sa.vf)
+        };
+      }
+    }
+    const T = q('T', 'P', Pa, out, raw, f);
+    const r = { T, P, phase: sa ? (val < sa[key + 'f'] ? 'liq' : 'vap') : 'sc' };
+    r.h = key === 'h' ? val : q('H', 'P', Pa, out, raw, f) / 1000 + fl.hOff;
+    r.s = key === 's' ? val : q('S', 'P', Pa, out, raw, f) / 1000 + fl.sOff;
+    r.v = 1 / q('D', 'P', Pa, out, raw, f);
+    return r;
+  }
+  const stateAtPH = (fl, P, h) => stateAt(fl, P, 'h', h);
+  const stateAtPS = (fl, P, s) => stateAt(fl, P, 's', s);
+
+  /* ---------- cycle from measured points ---------- */
+  function cycleFromPoints(fl, p) {
+    const fail = msg => ({ ok: false, err: msg });
+    const Ps = p.Ps, Pd = p.Pd, Ts = p.Ts, Td = p.Td, T3 = p.T3;
+    if (!(Ps > 10)) return fail('Suction pressure is too low.');
+    if (Ps >= fl.Pc) return fail('Suction pressure must be below the critical pressure (' + (fl.Pc / 100).toFixed(1) + ' bar a).');
+    if (!(Pd > Ps * 1.02)) return fail('Discharge pressure must be above the suction pressure.');
+    if (!(Ts > 150 && Td > 150 && T3 > 150 && Ts < 800 && Td < 800 && T3 < 800)) return fail('A temperature is out of range.');
+    try {
+      const satS = sat(fl, Ps);
+      if (!satS) return fail('Suction pressure is too close to the critical pressure.');
+      const gl = satS.Td - satS.Tb, word = gl > 1 ? 'dew point' : 'saturation temperature';
+      const dewS = satS.Td;
+      if (Ts < dewS - 0.3) return fail('Suction temperature is below the ' + word + ' (' + (dewS - 273.15).toFixed(1) + ' °C at that pressure). Check the suction readings.');
+      const st1 = stateTP(fl, Math.max(Ts, dewS + 0.001), Ps, 'vap');
+      const satK = Pd < fl.Pc * 0.9999 ? sat(fl, Pd) : null;
+      const dewK = satK ? satK.Td : null, bubK = satK ? satK.Tb : null;
+      if (satK && Td < dewK) return fail('Discharge temperature is below the ' + (satK.Td - satK.Tb > 1 ? 'dew point' : 'saturation temperature') + ' (' + (dewK - 273.15).toFixed(1) + ' °C at that pressure). Check the discharge readings.');
+      const st2 = stateTP(fl, Math.max(Td, satK ? dewK + 0.001 : Td), Pd, satK ? 'vap' : 'sc');
+      let st3, note = null;
+      if (satK) {
+        if (T3 > bubK + 0.5) return fail('Liquid line temperature is above the ' + (satK.Td - satK.Tb > 1 ? 'bubble point' : 'saturation temperature') + ' (' + (bubK - 273.15).toFixed(1) + ' °C at the discharge pressure), so the liquid is not subcooled. Check the readings.');
+        if (T3 >= bubK - 0.001) { st3 = { T: bubK, P: Pd, h: satK.hf, s: satK.sf, v: satK.vf, phase: 'liq' }; note = 'No subcooling: liquid taken as saturated.'; }
+        else st3 = stateTP(fl, T3, Pd, 'liq');
+      } else st3 = stateTP(fl, T3, Pd, 'sc');
+      if (!(st2.h > st1.h)) return fail('Discharge enthalpy is not above suction enthalpy. Check the discharge readings.');
+      const st4 = stateAt(fl, Ps, 'h', st3.h, satS);
+      if (!(st1.h > st4.h)) return fail('No cooling effect from these readings. Check the liquid line temperature.');
+      const st2s = stateAt(fl, Pd, 's', st1.s, satK);
+      return {
+        ok: true, measured: true, note, glide: gl, Pe: Ps, Pk: Pd, st1, st2s, st2, st3, st4, satK, satS, hDewS: satS.hg, hBubK: satK ? satK.hf : null,
+        qe: st1.h - st4.h, w: st2.h - st1.h, qc: st2.h - st3.h,
+        cop: (st1.h - st4.h) / (st2.h - st1.h), copH: (st2.h - st3.h) / (st2.h - st1.h), pr: Pd / Ps,
+        dsh: satK ? Td - dewK : null, eta: (st2s.h - st1.h) / (st2.h - st1.h),
+        sh: Ts - dewS, sc: satK ? bubK - T3 : null, Tevap: dewS, Tcond: dewK, Tbub: bubK
+      };
+    } catch (e) {
+      return fail('CoolProp could not work with these readings (' + (e && e.message ? e.message : 'calculation failed') + '). Check them for typing errors.');
+    }
+  }
+  function compressionPath(fl, cyc, eta, n) {
+    const out = [], a = Math.log(cyc.Pe), b = Math.log(cyc.Pk);
+    for (let i = 0; i <= n; i++) {
+      const P = Math.exp(a + (b - a) * i / n);
+      let hi;
+      if (i === 0) hi = cyc.st1.h; else if (i === n) hi = cyc.st2s.h;
+      else { try { hi = stateAt(fl, P, 's', cyc.st1.s).h; } catch (e) { continue; } }
+      out.push([cyc.st1.h + (hi - cyc.st1.h) / eta, P]);
+    }
+    return out;
+  }
+
+  /* ---------- chart lines, built in small time slices so the page stays responsive ---------- */
+  const nice = (range, maxCount, cands) => { for (const c of cands) if (range / c <= maxCount) return c; return cands[cands.length - 1]; };
+  function buildLines(fl, notify) {
+    const f = fl.cpName, V = fl.view, t = fl.tab, N = 100;
+    const L = { iso: [], ent: [], vol: [], qual: [] };
+    fl.lines = L;
+    for (let k = 1; k <= 9; k++) {
+      const x = k / 10, pts = [];
+      for (let i = 0; i < t.n; i++) pts.push([t.hf[i] + x * (t.hg[i] - t.hf[i]), t.P[i]]);
+      L.qual.push({ val: x, pts });
+    }
+    const grid = [], sats = [];
+    const tasks = [];
+    const H = (T, P) => q('H', 'T', T, 'P', P * 1000, f) / 1000 + fl.hOff;
+    tasks.push(() => { for (let i = 0; i < N; i++) { const P = V.Pmin * Math.pow(V.Pmax / V.Pmin, i / (N - 1)); grid.push(P); let s = null; try { s = sat(fl, P); } catch (e) { s = null; } sats.push(s); } });
+    const Tlo = Math.ceil((fl.tmin - 273.15) / 10) * 10, Thi = Math.floor((fl.Tc - 273.15 + 70) / 10) * 10;
+    for (let tc = Tlo; tc <= Thi; tc += 10) {
+      tasks.push(() => {
+        const T = tc + 273.15, pts = [];
+        const put = (h, P) => pts.push([h, P]);
+        if (T < fl.Tc) {
+          let Pd = 0, Pb = 0;
+          try { Pd = q('P', 'T', T, 'Q', 1, f) / 1000; Pb = q('P', 'T', T, 'Q', 0, f) / 1000; } catch (e) { return; }
+          if (Pd > V.Pmin) {
+            for (let i = 0; i < N && grid[i] < Pd * 0.999; i++) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
+            put(q('H', 'P', Pd * 1000, 'Q', 1, f) / 1000 + fl.hOff, Pd);
+            put(q('H', 'P', Pb * 1000, 'Q', 0, f) / 1000 + fl.hOff, Pb);
+            for (let i = 0; i < N; i++) if (grid[i] > Pb * 1.001) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
+          } else for (let i = 0; i < N; i++) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
+        } else for (let i = 0; i < N; i++) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
+        if (pts.length > 1) L.iso.push({ val: tc, pts, nv: 0 });
+      });
+    }
+    let sMax = t.sg[0] + 2;
+    try { sMax = q('S', 'T', fl.Tc + 70, 'P', V.Pmin * 1000, f) / 1000 + fl.sOff; } catch (e) { /* default */ }
+    const sMin = t.sf[0], sStep = nice(sMax - sMin, 26, [0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1]);
+    for (let s = Math.ceil(sMin / sStep) * sStep; s <= sMax; s += sStep) {
+      const sv = Math.round(s / sStep) * sStep;
+      tasks.push(() => {
+        const segs = []; let cur = [];
+        for (let i = 0; i < N; i++) {
+          const sa = sats[i];
+          if (sa && sv < sa.sf) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+          try { cur.push([stateAt(fl, grid[i], 's', sv, sa).h, grid[i]]); } catch (e) { if (cur.length) { segs.push(cur); cur = []; } }
+        }
+        if (cur.length) segs.push(cur);
+        if (segs.length) L.ent.push({ val: sv, segs, step: sStep });
+      });
+    }
+    const vMin = 1 / q('D', 'T', fl.Tc, 'P', fl.Pc * 1000 * 1.0001, f) * 1.05, vMax = t.vg[0];
+    const vals = [];
+    for (let e = -5; e <= 1; e++) for (const m of [1, 2, 3, 5, 7]) { const v = m * Math.pow(10, e); if (v >= vMin && v <= vMax) vals.push(v); }
+    vals.forEach(v => tasks.push(() => {
+      const segs = []; let cur = [];
+      for (let i = 0; i < N; i++) {
+        const P = grid[i], sa = sats[i];
+        try {
+          if (sa) {
+            if (v < sa.vf) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+            if (v <= sa.vg) { const x = (v - sa.vf) / (sa.vg - sa.vf); cur.push([sa.hf + x * (sa.hg - sa.hf), P]); continue; }
+          }
+          cur.push([q('H', 'P', P * 1000, 'D', 1 / v, f) / 1000 + fl.hOff, P]);
+        } catch (e) { if (cur.length) { segs.push(cur); cur = []; } }
+      }
+      if (cur.length) segs.push(cur);
+      if (segs.length) L.vol.push({ val: v, segs });
+    }));
+    let k = 0;
+    const token = (fl.buildToken = {});
+    const step = () => {
+      if (fl.buildToken !== token) return;
+      const t0 = Date.now();
+      while (k < tasks.length && Date.now() - t0 < 30) { try { tasks[k](); } catch (e) { /* skip this line */ } k++; }
+      if (notify) notify();
+      if (k < tasks.length) setTimeout(step, 0);
+    };
+    setTimeout(step, 0);
+    return L;
+  }
+
+  return { setAPI, supports, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat };
+})(BI);
+
+
+/* Engine facade: built-in engine (BI) until CoolProp has loaded and passed its self-check. */
+let MD = (function () {
+  const st = { cp: false, status: 'loading', detail: '' };
+  const F = { DEFS: BI.DEFS, state: st, onEngine: null, onLines: null };
+  const isCP = fl => !!(fl && fl.viaCP);
+  F.get = function (id, ref) {
+    if (st.cp && CPE.supports(id)) { try { return CPE.get(id, ref); } catch (e) { /* fall through to built-in */ } }
+    return BI.get(id, ref);
+  };
+  F.buildLines = fl => isCP(fl) ? CPE.buildLines(fl, () => { if (F.onLines) F.onLines(); }) : BI.buildLines(fl);
+  F.cycleFromPoints = (fl, p) => isCP(fl) ? CPE.cycleFromPoints(fl, p) : BI.cycleFromPoints(fl, p);
+  F.compressionPath = (fl, c, eta, n) => isCP(fl) ? CPE.compressionPath(fl, c, eta, n) : BI.compressionPath(fl, c, eta, n);
+  F.stateAtPH = (fl, P, h, x) => isCP(fl) ? CPE.stateAtPH(fl, P, h) : BI.stateAtPH(fl, P, h, x);
+  F.stateAtPS = (fl, P, s, x) => isCP(fl) ? CPE.stateAtPS(fl, P, s) : BI.stateAtPS(fl, P, s, x);
+  F.cycle = (fl, a) => BI.cycle(isCP(fl) ? BI.get(fl.id, fl.refMode) : fl, a);
+
+  function selfCheck(api) {
+    CPE.setAPI(api);
+    const near = (v, t, tol) => typeof v === 'number' && Math.abs(v / t - 1) < tol;
+    const tc = api('Tcrit', '', 0, '', 0, 'R134a');
+    if (!near(tc, 374.21, 0.001)) throw new Error('critical temperature of R134a came back as ' + tc);
+    const p20 = api('P', 'T', 293.15, 'Q', 1, 'R134a');
+    if (!near(p20, 571.7e3, 0.005)) throw new Error('R134a vapour pressure at 20 C came back as ' + p20 + ' (expected about 571700 Pa)');
+    const h = api('H', 'T', 313.15, 'P', 5e5, 'R134a'), h2 = api('H', 'T', 333.15, 'P', 5e5, 'R134a');
+    if (!(h2 > h && (h2 - h) / 20 > 800 && (h2 - h) / 20 < 1500)) throw new Error('enthalpy of R134a vapour looks wrong');
+    const m = api('Tcrit', '', 0, '', 0, 'R410A.mix');
+    if (!near(m, 344.5, 0.02)) throw new Error('R410A.mix critical temperature came back as ' + m);
+    CPE.get('R134a', 'IIR');
+  }
+  F.useCoolProp = function (api) {
+    try { selfCheck(api); st.cp = true; st.status = 'coolprop'; st.detail = ''; }
+    catch (e) { st.cp = false; st.status = 'failed'; st.detail = e && e.message ? e.message : String(e); }
+    if (F.onEngine) F.onEngine();
+    return st.cp;
+  };
+  F.noCoolProp = function (why) { st.cp = false; st.status = 'builtin'; st.detail = why || ''; if (F.onEngine) F.onEngine(); };
+
+  /* Load coolprop.js (and its coolprop.wasm) from the same folder as this page. */
+  F.loadCoolProp = function () {
+    if (window.__CP_TEST_API) { setTimeout(() => F.useCoolProp(window.__CP_TEST_API), 0); return; }
+    if (location.protocol === 'file:') { F.noCoolProp('Open the site over http or https (GitHub Pages) so CoolProp can load.'); return; }
+    window.Module = window.Module || {};
+    const s = document.createElement('script');
+    let done = false;
+    const fin = fn => { if (!done) { done = true; clearInterval(iv); fn(); } };
+    s.src = 'coolprop.js';
+    s.onerror = () => fin(() => F.noCoolProp('coolprop.js was not found next to index.html.'));
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      const M = window.Module;
+      if (M && typeof M.PropsSI === 'function') fin(() => F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f)));
+      else if (Date.now() - t0 > 30000) fin(() => F.noCoolProp('CoolProp did not finish loading (is coolprop.wasm next to index.html?).'));
+    }, 150);
+    document.head.appendChild(s);
+  };
+  return F;
+})();
+
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -810,6 +1124,10 @@ const MD = (function () {
     const gl = f.glide >= 1;
     $('fluidWarn').textContent = gl ? 'Temperature glide is about ' + f.glide + ' K. Superheat is measured from the dew point and subcooling from the bubble point. ' + (f.warn || '') : (f.warn || 'The ideal-gas heat capacity for this fluid is estimated, so enthalpy differences are less certain than for the other fluids.');
     $('fluidWarn').hidden = !(f.est || gl);
+    if (f.viaCP) {
+      $('fluidWarn').textContent = gl ? 'Mixture with temperature glide (about ' + f.glide + ' K at typical conditions). Superheat is measured from the dew point and subcooling from the bubble point, both taken from CoolProp.' : '';
+      $('fluidWarn').hidden = !gl;
+    }
     resetView();
     if (!S.touched) fillExample();
   }
@@ -1472,8 +1790,22 @@ const MD = (function () {
     }
   }
 
+  /* ---------- engine badge ---------- */
+  function updateBadge() {
+    const b = $('engBadge'), st = MD.state;
+    let t, c;
+    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : 'Properties: built-in model (no CoolProp name for this fluid)'; c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
+    else if (st.status === 'loading') { t = 'Properties: built-in model, loading CoolProp\u2026'; c = 'warn'; }
+    else if (st.status === 'failed') { t = 'Properties: built-in model (CoolProp failed its self-check)'; c = 'bad'; }
+    else { t = 'Properties: built-in model (CoolProp not loaded)'; c = 'warn'; }
+    b.textContent = t; b.className = 'eng ' + c; b.title = st.detail || '';
+    b.hidden = false;
+  }
+
   /* ---------- start ---------- */
   function init() {
+    MD.onEngine = () => { cur.probe = null; cur.sticky = false; selectFluid(S.fluid); syncInputs(); recompute(true); updateBadge(); };
+    MD.onLines = () => draw();
     bindInputs();
     initPdf();
     selectFluid(S.fluid);
@@ -1484,10 +1816,12 @@ const MD = (function () {
     try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw); } catch (e) { /* ignore */ }
     try { new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] }); } catch (e) { /* ignore */ }
     try { document.fonts.ready.then(draw); } catch (e) { /* ignore */ }
+    updateBadge();
+    MD.loadCoolProp();
   }
   init();
 })();
-
 </script>
+
 </body>
 </html>
