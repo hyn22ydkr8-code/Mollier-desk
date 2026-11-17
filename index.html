@@ -1020,12 +1020,27 @@ let MD = (function () {
   F.loadCoolProp = function () {
     if (window.__CP_TEST_API) { setTimeout(() => F.useCoolProp(window.__CP_TEST_API), 0); return; }
     if (location.protocol === 'file:') { F.noCoolProp('Open the site over http or https (GitHub Pages) so CoolProp can load.'); return; }
+    const withTimeout = (p, ms, msg) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]);
+    /* Newer CoolProp builds are ES modules exporting a factory function; older ones are classic scripts. */
+    import('./coolprop.js').then(async mod => {
+      const fac = mod.default || mod.Module || Object.values(mod).find(v => typeof v === 'function');
+      if (typeof fac !== 'function') throw new Error('coolprop.js exports: ' + Object.keys(mod).join(', '));
+      const M = await withTimeout(Promise.resolve(fac({})), 40000, 'CoolProp took too long to start (is coolprop.wasm next to index.html?)');
+      if (!M || typeof M.PropsSI !== 'function') throw new Error('CoolProp started but has no PropsSI. It has: ' + Object.keys(M || {}).slice(0, 6).join(', '));
+      F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f));
+    }).catch(err => {
+      const m = String(err && err.message || err);
+      if (/SyntaxError|import|export|Unexpected|Failed to fetch dynamically|error loading dynamically/i.test(m) && !/too long|no PropsSI|exports:/.test(m)) loadClassic(m);
+      else F.noCoolProp(m);
+    });
+  };
+  function loadClassic(firstErr) {
     window.Module = window.Module || {};
     const s = document.createElement('script');
     let done = false;
     const fin = fn => { if (!done) { done = true; clearInterval(iv); fn(); } };
     s.src = 'coolprop.js';
-    s.onerror = () => fin(() => F.noCoolProp('coolprop.js was not found next to index.html.'));
+    s.onerror = () => fin(() => F.noCoolProp('coolprop.js was not found next to index.html. (' + firstErr + ')'));
     const errs = [];
     window.addEventListener('error', e => { if (errs.length < 2) errs.push(String(e.message || e).slice(0, 80)); });
     const diagnose = async () => {
@@ -1050,7 +1065,7 @@ let MD = (function () {
       else if (Date.now() - t0 > 20000) fin(() => diagnose());
     }, 150);
     document.head.appendChild(s);
-  };
+  }
   return F;
 })();
 
