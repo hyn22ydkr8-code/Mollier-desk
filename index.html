@@ -61,6 +61,8 @@ select:focus-visible, input:focus-visible, button:focus-visible, .chip input:foc
 .controls { grid-area: controls; padding: 14px; display: grid; gap: 16px; align-content: start; }
 .grp { display: grid; gap: 10px; }
 .meta { margin: 0; font-size: 12px; color: var(--ink-2); }
+.fl { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.sat { font-size: 11px; font-family: var(--f-mono); color: var(--ink-2); font-weight: 400; text-align: right; }
 .eng { margin: 0; font-size: 11px; font-family: var(--f-mono); padding: 3px 8px; border-radius: 999px; display: inline-block; border: 1px solid var(--line, currentColor); color: var(--ink-2); }
 .eng.ok { color: var(--c-sc); }
 .eng.bad { color: var(--c-sh); }
@@ -173,14 +175,14 @@ details p { margin: 8px 0 0; max-width: 78ch; }
         <div class="pt">
           <b>Suction (compressor inlet)</b>
           <div class="pair">
-            <label class="f" for="inpPs"><span>Pressure</span><span class="inp"><input id="inpPs" type="number" step="any"><em class="pu">bar g</em></span></label>
+            <label class="f" for="inpPs"><span class="fl">Pressure<small class="sat" id="satPs"></small></span><span class="inp"><input id="inpPs" type="number" step="any"><em class="pu">bar g</em></span></label>
             <label class="f" for="inpTs"><span>Temperature</span><span class="inp"><input id="inpTs" type="number" step="any"><em>&deg;C</em></span></label>
           </div>
         </div>
         <div class="pt">
           <b>Discharge (compressor outlet)</b>
           <div class="pair">
-            <label class="f" for="inpPd"><span>Pressure</span><span class="inp"><input id="inpPd" type="number" step="any"><em class="pu">bar g</em></span></label>
+            <label class="f" for="inpPd"><span class="fl">Pressure<small class="sat" id="satPd"></small></span><span class="inp"><input id="inpPd" type="number" step="any"><em class="pu">bar g</em></span></label>
             <label class="f" for="inpTd"><span>Temperature</span><span class="inp"><input id="inpTd" type="number" step="any"><em>&deg;C</em></span></label>
           </div>
         </div>
@@ -993,6 +995,14 @@ let MD = (function () {
   F.compressionPath = (fl, c, eta, n) => isCP(fl) ? CPE.compressionPath(fl, c, eta, n) : BI.compressionPath(fl, c, eta, n);
   F.stateAtPH = (fl, P, h, x) => isCP(fl) ? CPE.stateAtPH(fl, P, h) : BI.stateAtPH(fl, P, h, x);
   F.stateAtPS = (fl, P, s, x) => isCP(fl) ? CPE.stateAtPS(fl, P, s) : BI.stateAtPS(fl, P, s, x);
+  F.satT = function (fl, P) {
+    try {
+      if (isCP(fl)) { const s = CPE.sat(fl, P); return s ? { Tb: s.Tb, Td: s.Td } : null; }
+      if (!(P < fl.Pc * 0.999) || !(P > 5)) return null;
+      const T = BI.satAtP(fl, P, false).T, g = fl.glide || 0;
+      return { Tb: T - g / 2, Td: T + g / 2 };
+    } catch (e) { return null; }
+  };
   F.cycle = (fl, a) => BI.cycle(isCP(fl) ? BI.get(fl.id, fl.refMode) : fl, a);
 
   function selfCheck(api) {
@@ -1216,7 +1226,18 @@ let MD = (function () {
       { k: '4', name: 'After expansion', st: c.st4, P: c.Pe, meas: false }
     ] : null;
   }
+  function updateSat() {
+    [['Ps', 'satPs'], ['Pd', 'satPd']].forEach(([k, id]) => {
+      const el = $(id); let t = '';
+      if (isFinite(S[k]) && cur.fl) {
+        const s = MD.satT(cur.fl, PU[S.pu].t(S[k]));
+        if (s) t = s.Td - s.Tb > 1 ? 'Dew ' + num(C2(s.Td), 1) + ' \u00B7 Bub ' + num(C2(s.Tb), 1) + ' \u00B0C' : 'Sat. ' + num(C2((s.Td + s.Tb) / 2), 1) + ' \u00B0C';
+      }
+      el.textContent = t;
+    });
+  }
   function recompute(refit) {
+    updateSat();
     const bad = ['Ps', 'Ts', 'Pd', 'Td', 'T3'].find(k => !isFinite(S[k]));
     if (bad) { showMsg('Enter all five readings to calculate.'); cur.cyc = null; }
     else {
