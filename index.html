@@ -1798,6 +1798,7 @@ let MD = (function () {
     else if (st.status === 'loading') { t = 'Properties: built-in model, loading CoolProp\u2026'; c = 'warn'; }
     else if (st.status === 'failed') { t = 'Properties: built-in model (CoolProp failed its self-check)'; c = 'bad'; }
     else { t = 'Properties: built-in model (CoolProp not loaded)'; c = 'warn'; }
+    if (st.detail && st.status !== 'coolprop') t += ' \u2014 ' + st.detail;
     b.textContent = t; b.className = 'eng ' + c; b.title = st.detail || '';
     b.hidden = false;
   }
