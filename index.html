@@ -932,8 +932,8 @@ const CPE = (function (BI) {
 
   /* ---------- chart lines, built in small time slices so the page stays responsive ---------- */
   const nice = (range, maxCount, cands) => { for (const c of cands) if (range / c <= maxCount) return c; return cands[cands.length - 1]; };
-  function buildLines(fl, notify) {
-    const f = fl.cpName, V = fl.view, t = fl.tab, N = 100;
+  function buildLines(fl, notify, wantFn) {
+    const f = fl.cpName, V = fl.view, t = fl.tab, mix = /^HEOS|\.mix$/.test(f), N = mix ? 50 : 70;
     const L = { iso: [], ent: [], vol: [], qual: [] };
     fl.lines = L;
     for (let k = 1; k <= 9; k++) {
@@ -942,33 +942,34 @@ const CPE = (function (BI) {
       L.qual.push({ val: x, pts });
     }
     const grid = [], sats = [];
-    const tasks = [];
+    const Q = { prep: [], iso: [], ent: [], vol: [] };
     const H = (T, P) => q('H', 'T', T, 'P', P * 1000, f) / 1000 + fl.hOff;
-    tasks.push(() => { for (let i = 0; i < N; i++) { const P = V.Pmin * Math.pow(V.Pmax / V.Pmin, i / (N - 1)); grid.push(P); let s = null; try { s = sat(fl, P); } catch (e) { s = null; } sats.push(s); } });
+    Q.prep.push(() => { for (let i = 0; i < N; i++) { const P = V.Pmin * Math.pow(V.Pmax / V.Pmin, i / (N - 1)); grid.push(P); let s = null; try { s = sat(fl, P); } catch (e) { s = null; } sats.push(s); } });
     const Tlo = Math.ceil((fl.tmin - 273.15) / 10) * 10, Thi = Math.floor((fl.Tc - 273.15 + 70) / 10) * 10;
     for (let tc = Tlo; tc <= Thi; tc += 10) {
-      tasks.push(() => {
+      Q.iso.push(() => {
         const T = tc + 273.15, pts = [];
         const put = (h, P) => pts.push([h, P]);
+        const one = i => { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } };
         if (T < fl.Tc) {
           let Pd = 0, Pb = 0;
           try { Pd = q('P', 'T', T, 'Q', 1, f) / 1000; Pb = q('P', 'T', T, 'Q', 0, f) / 1000; } catch (e) { return; }
           if (Pd > V.Pmin) {
-            for (let i = 0; i < N && grid[i] < Pd * 0.999; i++) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
+            for (let i = 0; i < N && grid[i] < Pd * 0.999; i++) one(i);
             put(q('H', 'P', Pd * 1000, 'Q', 1, f) / 1000 + fl.hOff, Pd);
             put(q('H', 'P', Pb * 1000, 'Q', 0, f) / 1000 + fl.hOff, Pb);
-            for (let i = 0; i < N; i++) if (grid[i] > Pb * 1.001) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
-          } else for (let i = 0; i < N; i++) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
-        } else for (let i = 0; i < N; i++) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
+            for (let i = 0; i < N; i++) if (grid[i] > Pb * 1.001) one(i);
+          } else for (let i = 0; i < N; i++) one(i);
+        } else for (let i = 0; i < N; i++) one(i);
         if (pts.length > 1) L.iso.push({ val: tc, pts, nv: 0 });
       });
     }
     let sMax = t.sg[0] + 2;
     try { sMax = q('S', 'T', fl.Tc + 70, 'P', V.Pmin * 1000, f) / 1000 + fl.sOff; } catch (e) { /* default */ }
-    const sMin = t.sf[0], sStep = nice(sMax - sMin, 26, [0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1]);
+    const sMin = t.sf[0], sStep = nice(sMax - sMin, mix ? 14 : 22, [0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1]);
     for (let s = Math.ceil(sMin / sStep) * sStep; s <= sMax; s += sStep) {
       const sv = Math.round(s / sStep) * sStep;
-      tasks.push(() => {
+      Q.ent.push(() => {
         const segs = []; let cur = [];
         for (let i = 0; i < N; i++) {
           const sa = sats[i];
@@ -979,10 +980,11 @@ const CPE = (function (BI) {
         if (segs.length) L.ent.push({ val: sv, segs, step: sStep });
       });
     }
-    const vMin = 1 / q('D', 'T', fl.Tc, 'P', fl.Pc * 1000 * 1.0001, f) * 1.05, vMax = t.vg[0];
-    const vals = [];
+    let vMin = 0.0005;
+    try { vMin = 1 / q('D', 'T', fl.Tc, 'P', fl.Pc * 1000 * 1.0001, f) * 1.05; } catch (e) { /* default */ }
+    const vMax = t.vg[0], vals = [];
     for (let e = -5; e <= 1; e++) for (const m of [1, 2, 3, 5, 7]) { const v = m * Math.pow(10, e); if (v >= vMin && v <= vMax) vals.push(v); }
-    vals.forEach(v => tasks.push(() => {
+    vals.forEach(v => Q.vol.push(() => {
       const segs = []; let cur = [];
       for (let i = 0; i < N; i++) {
         const P = grid[i], sa = sats[i];
@@ -997,16 +999,30 @@ const CPE = (function (BI) {
       if (cur.length) segs.push(cur);
       if (segs.length) L.vol.push({ val: v, segs });
     }));
-    let k = 0;
+    /* Work is done in short slices with gaps, only for the layers switched on, and it backs off while the page is being scrolled. */
     const token = (fl.buildToken = {});
-    const step = () => {
-      if (fl.buildToken !== token) return;
-      const t0 = Date.now();
-      while (k < tasks.length && Date.now() - t0 < 30) { try { tasks[k](); } catch (e) { /* skip this line */ } k++; }
-      if (notify) notify();
-      if (k < tasks.length) setTimeout(step, 0);
+    let timer = 0, lastNote = 0, lastTouch = 0;
+    const touch = () => { lastTouch = Date.now(); };
+    ['scroll', 'touchmove', 'wheel'].forEach(ev => window.addEventListener(ev, touch, { passive: true, capture: true }));
+    const want = () => { try { return wantFn ? wantFn() : { iso: true, ent: true, vol: true }; } catch (e) { return { iso: true, ent: true, vol: true }; } };
+    const next = () => {
+      if (Q.prep.length) return Q.prep;
+      const w = want();
+      for (const l of ['iso', 'ent', 'vol']) if (w[l] && Q[l].length) return Q[l];
+      return null;
     };
-    setTimeout(step, 0);
+    const step = () => {
+      timer = 0;
+      if (fl.buildToken !== token) { ['scroll', 'touchmove', 'wheel'].forEach(ev => window.removeEventListener(ev, touch, { capture: true })); return; }
+      if (Date.now() - lastTouch < 350) { timer = setTimeout(step, 120); return; }
+      const t0 = Date.now(); let did = false;
+      for (let qu = next(); qu && Date.now() - t0 < 12; qu = next()) { const job = qu.shift(); try { job(); } catch (e) { /* skip this line */ } did = true; }
+      const more = next();
+      if (notify && did && (!more || Date.now() - lastNote > 400)) { lastNote = Date.now(); notify(); }
+      if (more) timer = setTimeout(step, 40);
+    };
+    fl.kick = () => { if (!timer && fl.buildToken === token && next()) timer = setTimeout(step, 0); };
+    timer = setTimeout(step, 0);
     return L;
   }
 
@@ -1023,7 +1039,9 @@ let MD = (function () {
     if (st.cp && CPE.supports(id)) { try { st.fluidErr = ''; return CPE.get(id, ref); } catch (e) { st.fluidErr = id + ': ' + (e && e.message ? e.message : String(e)); } }
     return BI.get(id, ref);
   };
-  F.buildLines = fl => isCP(fl) ? CPE.buildLines(fl, () => { if (F.onLines) F.onLines(); }) : BI.buildLines(fl);
+  F.wantFn = null;
+  F.kick = fl => { if (fl && fl.kick) fl.kick(); };
+  F.buildLines = fl => isCP(fl) ? CPE.buildLines(fl, () => { if (F.onLines) F.onLines(); }, () => F.wantFn ? F.wantFn() : null) : BI.buildLines(fl);
   F.cycleFromPoints = (fl, p) => isCP(fl) ? CPE.cycleFromPoints(fl, p) : BI.cycleFromPoints(fl, p);
   F.compressionPath = (fl, c, eta, n) => isCP(fl) ? CPE.compressionPath(fl, c, eta, n) : BI.compressionPath(fl, c, eta, n);
   F.stateAtPH = (fl, P, h, x) => isCP(fl) ? CPE.stateAtPH(fl, P, h) : BI.stateAtPH(fl, P, h, x);
@@ -1281,7 +1299,7 @@ let MD = (function () {
     $('btnExample').addEventListener('click', () => { fillExample(); syncInputs(); recompute(true); });
     $('refSel').addEventListener('change', () => { const v = $('refSel').value; later('reference state', () => { S.ref = v; selectFluid(S.fluid); recompute(true); }); });
     [['lyIso', 'iso'], ['lyEnt', 'ent'], ['lyVol', 'vol'], ['lyQual', 'qual']].forEach(([id, k]) => {
-      $(id).addEventListener('change', () => { S.ly[k] = $(id).checked; draw(); save(); });
+      $(id).addEventListener('change', () => { S.ly[k] = $(id).checked; draw(); save(); MD.kick(cur.fl); });
     });
     $('btnFit').addEventListener('click', () => { fitView(); draw(); });
     $('btnFull').addEventListener('click', () => { resetView(); draw(); });
@@ -1937,6 +1955,7 @@ let MD = (function () {
   function init() {
     MD.onEngine = () => { cur.probe = null; cur.sticky = false; selectFluid(S.fluid); syncInputs(); recompute(true); updateBadge(); };
     MD.onLines = () => draw();
+    MD.wantFn = () => S.ly;
     $('btnDiag').addEventListener('click', () => {
       const pre = $('cpDiag'); pre.hidden = false; pre.textContent = 'Testing\u2026';
       setTimeout(() => { try { pre.textContent = MD.diagnose(); } catch (e) { pre.textContent = 'Test failed: ' + (e && e.message); } }, 30);
