@@ -775,7 +775,10 @@ const CPE = (function (BI) {
     const mol = ks.map(k => m[k] / BI.DEFS.find(d => d.id === k).M), tot = mol.reduce((a, b) => a + b, 0);
     return 'HEOS::' + ks.map((k, i) => CPN[k] + '[' + (mol[i] / tot).toFixed(6) + ']').join('&');
   }
-  const supports = id => !!(NAMES[id] || MIXES[id]);
+  /* Blends use the built-in model unless the page is opened with #cpblends (CoolProp blend calculations were too slow on phones). */
+  const BLEND_IDS = ['R404A', 'R407C', 'R410A', 'R507A'].concat(Object.keys(MIXES));
+  const blendsOn = () => /cpblends/.test(location.hash);
+  const supports = id => !!(NAMES[id] || MIXES[id]) && (blendsOn() || BLEND_IDS.indexOf(id) < 0);
 
   /* ---------- fluid setup ---------- */
   function setRef(fl, mode) {
@@ -1962,7 +1965,7 @@ let MD = (function () {
   function updateBadge() {
     const b = $('engBadge'), st = MD.state;
     let t, c;
-    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : 'Properties: built-in model for this fluid' + (st.fluidErr ? ' (CoolProp: ' + st.fluidErr + ')' : ''); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
+    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (cur.fl && cur.fl.grp === 'Blends' && !st.fluidErr ? 'Properties: built-in model (used for blends)' : 'Properties: built-in model for this fluid' + (st.fluidErr ? ' (CoolProp: ' + st.fluidErr + ')' : '')); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
     else if (st.status === 'loading') { t = 'Properties: built-in model, loading CoolProp\u2026'; c = 'warn'; }
     else if (st.status === 'failed') { t = 'Properties: built-in model (CoolProp failed its self-check)'; c = 'bad'; }
     else { t = 'Properties: built-in model (CoolProp not loaded)'; c = 'warn'; }
