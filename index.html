@@ -793,7 +793,7 @@ const CPE = (function (BI) {
     } else buildTable(fl);
   }
   function sat(fl, P) {
-    if (!(P < fl.Pc * 0.9999)) return null;
+    if (!(P < (fl.Pcalc || fl.Pc) * 0.9999)) return null;
     const Pa = P * 1000, f = fl.cpName, ho = fl.hOff, so = fl.sOff;
     return {
       P, Tb: q('T', 'P', Pa, 'Q', 0, f), Td: q('T', 'P', Pa, 'Q', 1, f),
@@ -819,8 +819,29 @@ const CPE = (function (BI) {
     if (T.length < 40) throw lastErr || new Error('saturation table could not be built');
     const n = T.length, topP = P[n - 1];
     if (topP < fl.Pc * 0.99) {
-      /* blend: take the top of the usable dome as the critical region */
-      fl.Pc = topP * 1.0005; fl.Tc = Math.max(lastS.Td, lastS.Tb) + 0.05; fl.truncated = true;
+      /* blend: CoolProp cannot flash right up to the critical point, so keep its limit for calculations
+         and close the top of the dome on the chart with a square-root approach to the critical point */
+      fl.Pcalc = topP * 1.0005; fl.truncated = true;
+      const Pce = fl.Pc;
+      if (topP > 0.85 * Pce && n >= 3) {
+        const r1 = Math.sqrt(Pce - topP), r2 = Math.sqrt(Pce - P[n - 2]);
+        const lim = (a1, a2) => a1 - (a1 - a2) * r1 / (r1 - r2);
+        const pair = (A, B) => {
+          let c0 = (lim(A[n - 1], A[n - 2]) + lim(B[n - 1], B[n - 2])) / 2;
+          const lo = Math.min(A[n - 1], B[n - 1]), hi = Math.max(A[n - 1], B[n - 1]);
+          if (!isFinite(c0) || c0 < lo || c0 > hi) c0 = (A[n - 1] + B[n - 1]) / 2;
+          return c0;
+        };
+        const hc = pair(hf, hg), sc = pair(sf, sg), vc = pair(vf, vg);
+        const a = [hf[n - 1], hg[n - 1], sf[n - 1], sg[n - 1], vf[n - 1], vg[n - 1], T[n - 1]];
+        const lims = [hc, hc, sc, sc, vc, vc, fl.Tc];
+        const K = 8;
+        for (let k = 1; k <= K; k++) {
+          const w = 1 - k / K, r = r1 * w;
+          const val = i => lims[i] + (a[i] - lims[i]) * w;
+          P.push(Pce - r * r); hf.push(val(0)); hg.push(val(1)); sf.push(val(2)); sg.push(val(3)); vf.push(val(4)); vg.push(val(5)); T.push(val(6));
+        }
+      }
     } else {
       const hc = (hf[n - 1] + hg[n - 1]) / 2, sc = (sf[n - 1] + sg[n - 1]) / 2, vc = (vf[n - 1] + vg[n - 1]) / 2;
       T.push(fl.Tc); P.push(fl.Pc); hf.push(hc); hg.push(hc); sf.push(sc); sg.push(sc); vf.push(vc); vg.push(vc);
