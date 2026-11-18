@@ -779,13 +779,18 @@ const CPE = (function (BI) {
 
   /* ---------- fluid setup ---------- */
   function setRef(fl, mode) {
+    const oldH = fl.hOff || 0, oldS = fl.sOff || 0, had = !!fl.tab;
     fl.hOff = 0; fl.sOff = 0;
     const Tr = mode === 'ASHRAE' ? 233.15 : 273.15;
     const h0 = q('H', 'T', Tr, 'Q', 0, fl.cpName) / 1000, s0 = q('S', 'T', Tr, 'Q', 0, fl.cpName) / 1000;
     fl.hOff = (mode === 'ASHRAE' ? 0 : 200) - h0;
     fl.sOff = (mode === 'ASHRAE' ? 0 : 1) - s0;
     fl.refMode = mode; fl.lines = null;
-    buildTable(fl);
+    if (had) {   /* only the reference point moves, so shift the stored table instead of recalculating it */
+      const dh = fl.hOff - oldH, ds = fl.sOff - oldS, t = fl.tab;
+      for (let i = 0; i < t.n; i++) { t.hf[i] += dh; t.hg[i] += dh; t.sf[i] += ds; t.sg[i] += ds; }
+      fl.view.h0 += dh; fl.view.h1 += dh;
+    } else buildTable(fl);
   }
   function sat(fl, P) {
     if (!(P < fl.Pc * 0.9999)) return null;
@@ -797,8 +802,9 @@ const CPE = (function (BI) {
       vf: 1 / q('D', 'P', Pa, 'Q', 0, f), vg: 1 / q('D', 'P', Pa, 'Q', 1, f)
     };
   }
+  const f0 = fl => fl.cpName;
   function buildTable(fl) {
-    const f = fl.cpName, N = 200;
+    const f = fl.cpName, N = /^HEOS|\.mix$/.test(f0(fl)) ? 70 : 110;
     const Pmin = q('P', 'T', fl.tmin, 'Q', 0, f) / 1000, Ptop = fl.Pc * 0.9992;
     const T = [], P = [], hf = [], hg = [], sf = [], sg = [], vf = [], vg = [];
     let lastErr = null, lastS = null;
@@ -1253,7 +1259,16 @@ let MD = (function () {
       MD.DEFS.filter(d => d.grp === g).forEach(d => { const o = document.createElement('option'); o.value = d.id; o.textContent = d.name; og.appendChild(o); });
       sel.appendChild(og);
     });
-    sel.addEventListener('change', () => { cur.probe = null; cur.sticky = false; selectFluid(sel.value); syncInputs(); recompute(true); });
+    let pend = 0;
+    const later = (label, fn) => {   /* let the picker close and show the new choice before the heavy calculation runs */
+      const id = ++pend, b = $('engBadge');
+      b.textContent = 'Calculating ' + label + '\u2026'; b.className = 'eng warn'; b.hidden = false;
+      requestAnimationFrame(() => setTimeout(() => { if (id === pend) fn(); }, 30));
+    };
+    sel.addEventListener('change', () => {
+      const v = sel.value, d = MD.DEFS.find(x => x.id === v);
+      later(d ? d.name : v, () => { cur.probe = null; cur.sticky = false; selectFluid(v); syncInputs(); recompute(true); });
+    });
     Object.keys(NUM).forEach(id => {
       $(id).addEventListener('input', () => { S[NUM[id]] = parseFloat($(id).value); S.touched = true; $('exNote').hidden = true; $('btnExample').hidden = false; recompute(false); });
     });
@@ -1264,7 +1279,7 @@ let MD = (function () {
       S.pu = $('puSel').value; syncInputs(); recompute(false);
     });
     $('btnExample').addEventListener('click', () => { fillExample(); syncInputs(); recompute(true); });
-    $('refSel').addEventListener('change', () => { S.ref = $('refSel').value; selectFluid(S.fluid); recompute(true); });
+    $('refSel').addEventListener('change', () => { const v = $('refSel').value; later('reference state', () => { S.ref = v; selectFluid(S.fluid); recompute(true); }); });
     [['lyIso', 'iso'], ['lyEnt', 'ent'], ['lyVol', 'vol'], ['lyQual', 'qual']].forEach(([id, k]) => {
       $(id).addEventListener('change', () => { S.ly[k] = $(id).checked; draw(); save(); });
     });
@@ -1915,7 +1930,7 @@ let MD = (function () {
     if (st.detail && st.status !== 'coolprop') t += ' \u2014 ' + st.detail;
     b.textContent = t; b.className = 'eng ' + c; b.title = st.detail || '';
     b.hidden = false;
-    $('btnDiag').hidden = st.status !== 'coolprop';
+    $('btnDiag').hidden = !(st.status === 'coolprop' && location.hash === '#diag');
   }
 
   /* ---------- start ---------- */
