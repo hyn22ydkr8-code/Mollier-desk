@@ -169,6 +169,7 @@ details p { margin: 8px 0 0; max-width: 78ch; }
         <p class="meta" id="fluidMeta"></p>
         <p class="warnnote" id="fluidWarn" hidden></p>
         <p class="eng warn" id="engBadge" hidden></p>
+        <div id="engRow" hidden style="margin-top:8px"><label class="f" for="engSel"><span class="fl">Calculation engine</span><select id="engSel"><option value="auto">Auto: CoolProp for single fluids, built-in for blends</option><option value="cp">CoolProp for everything (blends can be slow)</option><option value="bi">Built-in model for everything</option></select></label></div>
         <button type="button" class="btn" id="btnDiag" hidden style="margin-top:8px">Test CoolProp on blends</button>
         <pre id="cpDiag" hidden style="margin:8px 0 0;font:11px/1.45 var(--f-mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)"></pre>
       </div>
@@ -775,10 +776,9 @@ const CPE = (function (BI) {
     const mol = ks.map(k => m[k] / BI.DEFS.find(d => d.id === k).M), tot = mol.reduce((a, b) => a + b, 0);
     return 'HEOS::' + ks.map((k, i) => CPN[k] + '[' + (mol[i] / tot).toFixed(6) + ']').join('&');
   }
-  /* Blends use the built-in model unless the page is opened with #cpblends (CoolProp blend calculations were too slow on phones). */
   const BLEND_IDS = ['R404A', 'R407C', 'R410A', 'R507A'].concat(Object.keys(MIXES));
-  const blendsOn = () => /cpblends/.test(location.hash);
-  const supports = id => !!(NAMES[id] || MIXES[id]) && (blendsOn() || BLEND_IDS.indexOf(id) < 0);
+  const isBlend = id => BLEND_IDS.indexOf(id) >= 0;
+  const supports = id => !!(NAMES[id] || MIXES[id]);
 
   /* ---------- fluid setup ---------- */
   function setRef(fl, mode) {
@@ -1050,7 +1050,7 @@ const CPE = (function (BI) {
     return L;
   }
 
-  return { setAPI, setErrFn, supports, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat };
+  return { setAPI, setErrFn, supports, isBlend, satPdew: (fl, T) => q('P', 'T', T, 'Q', 1, fl.cpName) / 1000, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat };
 })(BI);
 
 
@@ -1059,9 +1059,16 @@ let MD = (function () {
   const st = { cp: false, status: 'loading', detail: '' };
   const F = { DEFS: BI.DEFS, state: st, onEngine: null, onLines: null };
   const isCP = fl => !!(fl && fl.viaCP);
+  F.pref = 'auto';   /* auto: CoolProp for single fluids, built-in for blends; cp: CoolProp wherever possible; bi: built-in */
+  const useCP = id => st.cp && CPE.supports(id) && (F.pref === 'cp' || (F.pref === 'auto' && !CPE.isBlend(id)));
   F.get = function (id, ref) {
-    if (st.cp && CPE.supports(id)) { try { st.fluidErr = ''; return CPE.get(id, ref); } catch (e) { st.fluidErr = id + ': ' + (e && e.message ? e.message : String(e)); } }
+    if (useCP(id)) { try { st.fluidErr = ''; return CPE.get(id, ref); } catch (e) { st.fluidErr = id + ': ' + (e && e.message ? e.message : String(e)); } }
     return BI.get(id, ref);
+  };
+  F.isBlend = id => CPE.isBlend(id);
+  F.satPdew = (fl, T) => {   /* pressure [kPa] at which the dew point is T [K] */
+    if (isCP(fl)) return CPE.satPdew(fl, T);
+    return BI.satP(fl, T - (fl.glide || 0) / 2).P;
   };
   F.wantFn = null;
   F.kick = fl => { if (fl && fl.kick) fl.kick(); };
@@ -1198,8 +1205,8 @@ let MD = (function () {
     kpaa: { l: 'kPa a', d: 0, f: k => k, t: v => v },
     kpag: { l: 'kPa g', d: 0, f: k => k - 101.325, t: v => v + 101.325 }
   };
-  const KEYS = ['fluid', 'ref', 'pu', 'Ps', 'Ts', 'Pd', 'Td', 'T3', 'touched', 'ly', 'site', 'eng', 'notes'];
-  const S = { fluid: 'R134a', ref: 'IIR', pu: 'barg', Ps: 1, Ts: 0, Pd: 9, Td: 68, T3: 35, touched: false, site: '', eng: '', notes: '', ly: { iso: true, ent: true, vol: false, qual: true } };
+  const KEYS = ['fluid', 'ref', 'pu', 'Ps', 'Ts', 'Pd', 'Td', 'T3', 'touched', 'ly', 'site', 'eng', 'notes', 'engPref'];
+  const S = { fluid: 'R134a', ref: 'IIR', pu: 'barg', Ps: 1, Ts: 0, Pd: 9, Td: 68, T3: 35, touched: false, site: '', eng: '', notes: '', engPref: 'auto', ly: { iso: true, ent: true, vol: false, qual: true } };
   const SKEY = 'mollier-desk-v2';
   try {
     const saved = JSON.parse(localStorage.getItem(SKEY) || '{}');
@@ -1207,6 +1214,7 @@ let MD = (function () {
     if (!MD.DEFS.some(d => d.id === S.fluid)) S.fluid = 'R134a';
     if (!PU[S.pu]) S.pu = 'barg';
     S.ly = Object.assign({ iso: true, ent: true, vol: false, qual: true }, S.ly || {});
+    if (['auto', 'cp', 'bi'].indexOf(S.engPref) < 0) S.engPref = 'auto';
   } catch (e) { /* storage unavailable */ }
   function save() { try { const o = {}; KEYS.forEach(k => { o[k] = S[k]; }); localStorage.setItem(SKEY, JSON.stringify(o)); } catch (e) { /* ignore */ } }
 
@@ -1255,14 +1263,35 @@ let MD = (function () {
     });
   }
   function fillExample() {
-    const d = cur.fl.def;
-    const c0 = MD.cycle(cur.fl, { Te: d.Te, SH: d.SH, Tcd: d.Tcd, SC: d.SC, Pgc: d.Pgc || 90, Tgc: d.Tgc || 35, eta: 0.7, mode: d.mode || 'cond' });
-    if (!c0.ok) return;
-    const u = PU[S.pu];
-    const pr = v => +v.toFixed(u.d);
-    S.Ps = pr(u.f(c0.Pe)); S.Pd = pr(u.f(c0.Pk));
-    const gh = (cur.fl.glide || 0) / 2;
-    S.Ts = rnd1(C2(c0.st1.T) + gh); S.Td = rnd1(C2(c0.st2.T)); S.T3 = rnd1(C2(c0.st3.T) - gh);
+    const fl = cur.fl, d = fl.def, u = PU[S.pu], pr = v => +v.toFixed(u.d);
+    const trans = d.mode === 'trans' || d.mode === 'transcritical';
+    const co2 = !!(d.Pgc);
+    let done = false;
+    try {
+      if (co2 || (fl.Tc - 273.15) >= 48) {
+        /* typical service readings: 0 \u00B0C evaporating, 6 K superheat, 40 \u00B0C condensing, 5 K subcooling, about 65 \u00B0C discharge */
+        const Pe = MD.satPdew(fl, 273.15);
+        const c0 = MD.cycle(fl, { Te: 0, SH: 6, Tcd: 40, SC: 5, Pgc: d.Pgc || 90, Tgc: d.Tgc || 35, eta: 0.7, mode: d.mode || 'cond' });
+        if (co2) {
+          const Pk = (d.Pgc || 90) * 100;
+          if (!c0.ok) throw new Error('example');
+          S.Ps = pr(u.f(Pe)); S.Pd = pr(u.f(Pk)); S.Ts = 6; S.T3 = d.Tgc || 35; S.Td = Math.round(C2(c0.st2.T));
+        } else {
+          const Pk = MD.satPdew(fl, 313.15), sk = MD.satT(fl, Pk);
+          let Td = 65;
+          if (c0.ok) { const real = C2(c0.st2.T); if (Math.abs(real - 65) > 15) Td = Math.round(real); }
+          S.Ps = pr(u.f(Pe)); S.Pd = pr(u.f(Pk)); S.Ts = 6; S.T3 = rnd1(C2(sk ? sk.Tb : 313.15) - 5); S.Td = Td;
+        }
+        done = true;
+      }
+    } catch (e) { done = false; }
+    if (!done) {   /* fluids that cannot condense at 40 \u00B0C: use the fluid's own typical cycle */
+      const c1 = MD.cycle(fl, { Te: d.Te, SH: d.SH, Tcd: d.Tcd, SC: d.SC, Pgc: d.Pgc || 90, Tgc: d.Tgc || 35, eta: 0.7, mode: d.mode || 'cond' });
+      if (!c1.ok) return;
+      const gh = (fl.glide || 0) / 2;
+      S.Ps = pr(u.f(c1.Pe)); S.Pd = pr(u.f(c1.Pk));
+      S.Ts = rnd1(C2(c1.st1.T) + gh); S.Td = rnd1(C2(c1.st2.T)); S.T3 = rnd1(C2(c1.st3.T) - gh);
+    }
     S.touched = false;
   }
   function selectFluid(id) {
@@ -1307,9 +1336,13 @@ let MD = (function () {
       b.textContent = 'Calculating ' + label + '\u2026'; b.className = 'eng warn'; b.hidden = false;
       requestAnimationFrame(() => setTimeout(() => { if (id === pend) fn(); }, 30));
     };
+    $('engSel').addEventListener('change', () => {
+      const v = $('engSel').value;
+      later('engine', () => { S.engPref = v; MD.pref = v; save(); cur.probe = null; cur.sticky = false; selectFluid(S.fluid); syncInputs(); recompute(true); updateBadge(); });
+    });
     sel.addEventListener('change', () => {
       const v = sel.value, d = MD.DEFS.find(x => x.id === v);
-      later(d ? d.name : v, () => { cur.probe = null; cur.sticky = false; selectFluid(v); syncInputs(); recompute(true); });
+      later(d ? d.name : v, () => { cur.probe = null; cur.sticky = false; S.touched = false; selectFluid(v); syncInputs(); recompute(true); });
     });
     Object.keys(NUM).forEach(id => {
       $(id).addEventListener('input', () => { S[NUM[id]] = parseFloat($(id).value); S.touched = true; $('exNote').hidden = true; $('btnExample').hidden = false; recompute(false); });
@@ -1965,13 +1998,14 @@ let MD = (function () {
   function updateBadge() {
     const b = $('engBadge'), st = MD.state;
     let t, c;
-    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (cur.fl && cur.fl.grp === 'Blends' && !st.fluidErr ? 'Properties: built-in model (used for blends)' : 'Properties: built-in model for this fluid' + (st.fluidErr ? ' (CoolProp: ' + st.fluidErr + ')' : '')); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
+    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (st.fluidErr ? 'Properties: built-in model for this fluid (CoolProp: ' + st.fluidErr + ')' : S.engPref === 'bi' ? 'Properties: built-in model (your choice)' : cur.fl && MD.isBlend(cur.fl.id) ? 'Properties: built-in model (Auto uses it for blends)' : 'Properties: built-in model for this fluid'); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
     else if (st.status === 'loading') { t = 'Properties: built-in model, loading CoolProp\u2026'; c = 'warn'; }
     else if (st.status === 'failed') { t = 'Properties: built-in model (CoolProp failed its self-check)'; c = 'bad'; }
     else { t = 'Properties: built-in model (CoolProp not loaded)'; c = 'warn'; }
     if (st.detail && st.status !== 'coolprop') t += ' \u2014 ' + st.detail;
     b.textContent = t; b.className = 'eng ' + c; b.title = st.detail || '';
     b.hidden = false;
+    $('engRow').hidden = st.status !== 'coolprop'; $('engSel').value = S.engPref;
     $('btnDiag').hidden = !(st.status === 'coolprop' && location.hash === '#diag');
   }
 
@@ -1979,6 +2013,7 @@ let MD = (function () {
   function init() {
     MD.onEngine = () => { cur.probe = null; cur.sticky = false; selectFluid(S.fluid); syncInputs(); recompute(true); updateBadge(); };
     MD.onLines = () => draw();
+    MD.pref = S.engPref;
     MD.wantFn = () => S.ly;
     $('btnDiag').addEventListener('click', () => {
       const pre = $('cpDiag'); pre.hidden = false; pre.textContent = 'Testing\u2026';
