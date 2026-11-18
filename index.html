@@ -9,8 +9,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Mollier Desk">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<style>:root{color-scheme:light}body{margin:0;font-size:14px}img{max-width:100%}[hidden]{display:none!important}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}</style>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>:root{color-scheme:light}body{margin:0;font-size:14px}img{max-width:100%}[hidden]{display:none!important}</style>
 </head>
 <body>
 <title>Mollier Desk</title>
@@ -69,7 +69,7 @@ select:focus-visible, input:focus-visible, button:focus-visible, .chip input:foc
 .meta { margin: 0; font-size: 12px; color: var(--ink-2); }
 .fl { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .sat { font-size: 11px; font-family: var(--f-mono); color: var(--ink-2); font-weight: 400; text-align: right; }
-.eng { margin: 0; font-size: 11px; font-family: var(--f-mono); padding: 3px 8px; border-radius: 14px; display: block; box-sizing: border-box; max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; border: 1px solid var(--line, currentColor); color: var(--ink-2); }
+.eng { margin: 0; font-size: 11px; font-family: var(--f-mono); padding: 3px 8px; border-radius: 999px; display: inline-block; border: 1px solid var(--line, currentColor); color: var(--ink-2); }
 .eng.ok { color: var(--c-sc); }
 .eng.bad { color: var(--c-sh); }
 .warnnote { margin: 0; font-size: 12px; color: var(--ink-2); border-left: 3px solid var(--c-vol); padding-left: 8px; }
@@ -169,8 +169,6 @@ details p { margin: 8px 0 0; max-width: 78ch; }
         <p class="meta" id="fluidMeta"></p>
         <p class="warnnote" id="fluidWarn" hidden></p>
         <p class="eng warn" id="engBadge" hidden></p>
-        <button type="button" class="btn" id="btnDiag" hidden style="margin-top:8px">Test CoolProp on blends</button>
-        <pre id="cpDiag" hidden style="margin:8px 0 0;font:11px/1.45 var(--f-mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)"></pre>
       </div>
 
       <div class="grp">
@@ -742,7 +740,7 @@ const BI = (function () {
 const CPE = (function (BI) {
   'use strict';
   let API = null;
-  function setAPI(f, ef) { API = f; if (ef !== undefined) errFn = ef; }
+  function setAPI(f) { API = f; }
   const NAMES = {
     R134a: 'R134a', R1234yf: 'R1234yf', R1234ze: 'R1234ze(E)', R32: 'R32', R125: 'R125', R143a: 'R143a', R152a: 'R152A', R23: 'R23',
     R245fa: 'R245fa', R1233zd: 'R1233zd(E)', R22: 'R22', R600: 'n-Butane', R600a: 'IsoButane', R290: 'Propane', R1270: 'Propylene',
@@ -757,17 +755,9 @@ const CPE = (function (BI) {
     R513A: { R1234yf: 56, R134a: 44 }
   };
   const cache = {};
-  let errFn = null;
-  function setErrFn(f) { errFn = f; }
-  const short = f => String(f).replace(/HEOS::/, '').replace(/\[(\d\.\d{2})\d*\]/g, '[$1]').slice(0, 40);
   const q = (out, k1, v1, k2, v2, f) => {
     const r = API(out, k1, v1, k2, v2, f);
-    if (typeof r !== 'number' || !isFinite(r) || Math.abs(r) > 1e300) {
-      let why = '';
-      try { if (errFn) why = String(errFn() || '').replace(/\s+/g, ' ').slice(0, 110); } catch (e) { /* none */ }
-      const num = x => typeof x === 'number' ? +x.toPrecision(6) : x;
-      throw new Error(out + (k1 ? ' from ' + k1 + '=' + num(v1) + ', ' + k2 + '=' + num(v2) : '') + ' for ' + short(f) + (why ? ': ' + why : ''));
-    }
+    if (typeof r !== 'number' || !isFinite(r) || Math.abs(r) > 1e300) throw new Error('CoolProp could not work out ' + out + ' for ' + f);
     return r;
   };
   function mixString(id) {
@@ -775,28 +765,20 @@ const CPE = (function (BI) {
     const mol = ks.map(k => m[k] / BI.DEFS.find(d => d.id === k).M), tot = mol.reduce((a, b) => a + b, 0);
     return 'HEOS::' + ks.map((k, i) => CPN[k] + '[' + (mol[i] / tot).toFixed(6) + ']').join('&');
   }
-  /* Blends use the built-in model unless the page is opened with #cpblends (CoolProp blend calculations were too slow on phones). */
-  const BLEND_IDS = ['R404A', 'R407C', 'R410A', 'R507A'].concat(Object.keys(MIXES));
-  const blendsOn = () => /cpblends/.test(location.hash);
-  const supports = id => !!(NAMES[id] || MIXES[id]) && (blendsOn() || BLEND_IDS.indexOf(id) < 0);
+  const supports = id => !!(NAMES[id] || MIXES[id]);
 
   /* ---------- fluid setup ---------- */
   function setRef(fl, mode) {
-    const oldH = fl.hOff || 0, oldS = fl.sOff || 0, had = !!fl.tab;
     fl.hOff = 0; fl.sOff = 0;
     const Tr = mode === 'ASHRAE' ? 233.15 : 273.15;
     const h0 = q('H', 'T', Tr, 'Q', 0, fl.cpName) / 1000, s0 = q('S', 'T', Tr, 'Q', 0, fl.cpName) / 1000;
     fl.hOff = (mode === 'ASHRAE' ? 0 : 200) - h0;
     fl.sOff = (mode === 'ASHRAE' ? 0 : 1) - s0;
     fl.refMode = mode; fl.lines = null;
-    if (had) {   /* only the reference point moves, so shift the stored table instead of recalculating it */
-      const dh = fl.hOff - oldH, ds = fl.sOff - oldS, t = fl.tab;
-      for (let i = 0; i < t.n; i++) { t.hf[i] += dh; t.hg[i] += dh; t.sf[i] += ds; t.sg[i] += ds; }
-      fl.view.h0 += dh; fl.view.h1 += dh;
-    } else buildTable(fl);
+    buildTable(fl);
   }
   function sat(fl, P) {
-    if (!(P < (fl.Pcalc || fl.Pc) * 0.9999)) return null;
+    if (!(P < fl.Pc * 0.9999)) return null;
     const Pa = P * 1000, f = fl.cpName, ho = fl.hOff, so = fl.sOff;
     return {
       P, Tb: q('T', 'P', Pa, 'Q', 0, f), Td: q('T', 'P', Pa, 'Q', 1, f),
@@ -805,50 +787,17 @@ const CPE = (function (BI) {
       vf: 1 / q('D', 'P', Pa, 'Q', 0, f), vg: 1 / q('D', 'P', Pa, 'Q', 1, f)
     };
   }
-  const f0 = fl => fl.cpName;
   function buildTable(fl) {
-    const f = fl.cpName, N = /^HEOS|\.mix$/.test(f0(fl)) ? 70 : 110;
+    const f = fl.cpName, N = 200;
     const Pmin = q('P', 'T', fl.tmin, 'Q', 0, f) / 1000, Ptop = fl.Pc * 0.9992;
     const T = [], P = [], hf = [], hg = [], sf = [], sg = [], vf = [], vg = [];
-    let lastErr = null, lastS = null;
     for (let i = 0; i < N; i++) {
       const u = 1 - Math.pow(1 - i / (N - 1), 2), p = Math.exp(Math.log(Pmin) + (Math.log(Ptop) - Math.log(Pmin)) * u);
-      let s;
-      try { s = sat(fl, p); } catch (e) { lastErr = e; continue; }   /* a few points can fail for blends near the critical point */
-      if (!s || !(s.Td >= s.Tb - 1e-6) || !(s.hg > s.hf)) { lastErr = lastErr || new Error('odd saturation values at ' + p.toFixed(0) + ' kPa'); continue; }
-      lastS = s;
+      const s = sat(fl, p);
       T.push(s.Tb); P.push(p); hf.push(s.hf); hg.push(s.hg); sf.push(s.sf); sg.push(s.sg); vf.push(s.vf); vg.push(s.vg);
     }
-    if (T.length < 40) throw lastErr || new Error('saturation table could not be built');
-    const n = T.length, topP = P[n - 1];
-    if (topP < fl.Pc * 0.99) {
-      /* blend: CoolProp cannot flash right up to the critical point, so keep its limit for calculations
-         and close the top of the dome on the chart with a square-root approach to the critical point */
-      fl.Pcalc = topP * 1.0005; fl.truncated = true;
-      const Pce = fl.Pc;
-      if (topP > 0.85 * Pce && n >= 3) {
-        const r1 = Math.sqrt(Pce - topP), r2 = Math.sqrt(Pce - P[n - 2]);
-        const lim = (a1, a2) => a1 - (a1 - a2) * r1 / (r1 - r2);
-        const pair = (A, B) => {
-          let c0 = (lim(A[n - 1], A[n - 2]) + lim(B[n - 1], B[n - 2])) / 2;
-          const lo = Math.min(A[n - 1], B[n - 1]), hi = Math.max(A[n - 1], B[n - 1]);
-          if (!isFinite(c0) || c0 < lo || c0 > hi) c0 = (A[n - 1] + B[n - 1]) / 2;
-          return c0;
-        };
-        const hc = pair(hf, hg), sc = pair(sf, sg), vc = pair(vf, vg);
-        const a = [hf[n - 1], hg[n - 1], sf[n - 1], sg[n - 1], vf[n - 1], vg[n - 1], T[n - 1]];
-        const lims = [hc, hc, sc, sc, vc, vc, fl.Tc];
-        const K = 8;
-        for (let k = 1; k <= K; k++) {
-          const w = 1 - k / K, r = r1 * w;
-          const val = i => lims[i] + (a[i] - lims[i]) * w;
-          P.push(Pce - r * r); hf.push(val(0)); hg.push(val(1)); sf.push(val(2)); sg.push(val(3)); vf.push(val(4)); vg.push(val(5)); T.push(val(6));
-        }
-      }
-    } else {
-      const hc = (hf[n - 1] + hg[n - 1]) / 2, sc = (sf[n - 1] + sg[n - 1]) / 2, vc = (vf[n - 1] + vg[n - 1]) / 2;
-      T.push(fl.Tc); P.push(fl.Pc); hf.push(hc); hg.push(hc); sf.push(sc); sg.push(sc); vf.push(vc); vg.push(vc);
-    }
+    const hc = (hf[N - 1] + hg[N - 1]) / 2;
+    T.push(fl.Tc); P.push(fl.Pc); hf.push(hc); hg.push(hc); sf.push((sf[N - 1] + sg[N - 1]) / 2); sg.push((sf[N - 1] + sg[N - 1]) / 2); vf.push((vf[N - 1] + vg[N - 1]) / 2); vg.push((vf[N - 1] + vg[N - 1]) / 2);
     fl.tab = { n: T.length, T, P, hf, hg, sf, sg, vf, vg, lnP: P.map(Math.log) };
     const Pmax = fl.Pc * 1.5, Pl = P[0] * 0.85;
     const hL = q('H', 'T', fl.tmin, 'P', Pmax * 1000, f) / 1000 + fl.hOff;
@@ -956,8 +905,8 @@ const CPE = (function (BI) {
 
   /* ---------- chart lines, built in small time slices so the page stays responsive ---------- */
   const nice = (range, maxCount, cands) => { for (const c of cands) if (range / c <= maxCount) return c; return cands[cands.length - 1]; };
-  function buildLines(fl, notify, wantFn) {
-    const f = fl.cpName, V = fl.view, t = fl.tab, mix = /^HEOS|\.mix$/.test(f), N = mix ? 50 : 70;
+  function buildLines(fl, notify) {
+    const f = fl.cpName, V = fl.view, t = fl.tab, N = 100;
     const L = { iso: [], ent: [], vol: [], qual: [] };
     fl.lines = L;
     for (let k = 1; k <= 9; k++) {
@@ -966,34 +915,33 @@ const CPE = (function (BI) {
       L.qual.push({ val: x, pts });
     }
     const grid = [], sats = [];
-    const Q = { prep: [], iso: [], ent: [], vol: [] };
+    const tasks = [];
     const H = (T, P) => q('H', 'T', T, 'P', P * 1000, f) / 1000 + fl.hOff;
-    Q.prep.push(() => { for (let i = 0; i < N; i++) { const P = V.Pmin * Math.pow(V.Pmax / V.Pmin, i / (N - 1)); grid.push(P); let s = null; try { s = sat(fl, P); } catch (e) { s = null; } sats.push(s); } });
+    tasks.push(() => { for (let i = 0; i < N; i++) { const P = V.Pmin * Math.pow(V.Pmax / V.Pmin, i / (N - 1)); grid.push(P); let s = null; try { s = sat(fl, P); } catch (e) { s = null; } sats.push(s); } });
     const Tlo = Math.ceil((fl.tmin - 273.15) / 10) * 10, Thi = Math.floor((fl.Tc - 273.15 + 70) / 10) * 10;
     for (let tc = Tlo; tc <= Thi; tc += 10) {
-      Q.iso.push(() => {
+      tasks.push(() => {
         const T = tc + 273.15, pts = [];
         const put = (h, P) => pts.push([h, P]);
-        const one = i => { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } };
         if (T < fl.Tc) {
           let Pd = 0, Pb = 0;
           try { Pd = q('P', 'T', T, 'Q', 1, f) / 1000; Pb = q('P', 'T', T, 'Q', 0, f) / 1000; } catch (e) { return; }
           if (Pd > V.Pmin) {
-            for (let i = 0; i < N && grid[i] < Pd * 0.999; i++) one(i);
+            for (let i = 0; i < N && grid[i] < Pd * 0.999; i++) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
             put(q('H', 'P', Pd * 1000, 'Q', 1, f) / 1000 + fl.hOff, Pd);
             put(q('H', 'P', Pb * 1000, 'Q', 0, f) / 1000 + fl.hOff, Pb);
-            for (let i = 0; i < N; i++) if (grid[i] > Pb * 1.001) one(i);
-          } else for (let i = 0; i < N; i++) one(i);
-        } else for (let i = 0; i < N; i++) one(i);
+            for (let i = 0; i < N; i++) if (grid[i] > Pb * 1.001) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
+          } else for (let i = 0; i < N; i++) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
+        } else for (let i = 0; i < N; i++) { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } }
         if (pts.length > 1) L.iso.push({ val: tc, pts, nv: 0 });
       });
     }
     let sMax = t.sg[0] + 2;
     try { sMax = q('S', 'T', fl.Tc + 70, 'P', V.Pmin * 1000, f) / 1000 + fl.sOff; } catch (e) { /* default */ }
-    const sMin = t.sf[0], sStep = nice(sMax - sMin, mix ? 14 : 22, [0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1]);
+    const sMin = t.sf[0], sStep = nice(sMax - sMin, 26, [0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1]);
     for (let s = Math.ceil(sMin / sStep) * sStep; s <= sMax; s += sStep) {
       const sv = Math.round(s / sStep) * sStep;
-      Q.ent.push(() => {
+      tasks.push(() => {
         const segs = []; let cur = [];
         for (let i = 0; i < N; i++) {
           const sa = sats[i];
@@ -1004,11 +952,10 @@ const CPE = (function (BI) {
         if (segs.length) L.ent.push({ val: sv, segs, step: sStep });
       });
     }
-    let vMin = 0.0005;
-    try { vMin = 1 / q('D', 'T', fl.Tc, 'P', fl.Pc * 1000 * 1.0001, f) * 1.05; } catch (e) { /* default */ }
-    const vMax = t.vg[0], vals = [];
+    const vMin = 1 / q('D', 'T', fl.Tc, 'P', fl.Pc * 1000 * 1.0001, f) * 1.05, vMax = t.vg[0];
+    const vals = [];
     for (let e = -5; e <= 1; e++) for (const m of [1, 2, 3, 5, 7]) { const v = m * Math.pow(10, e); if (v >= vMin && v <= vMax) vals.push(v); }
-    vals.forEach(v => Q.vol.push(() => {
+    vals.forEach(v => tasks.push(() => {
       const segs = []; let cur = [];
       for (let i = 0; i < N; i++) {
         const P = grid[i], sa = sats[i];
@@ -1023,34 +970,20 @@ const CPE = (function (BI) {
       if (cur.length) segs.push(cur);
       if (segs.length) L.vol.push({ val: v, segs });
     }));
-    /* Work is done in short slices with gaps, only for the layers switched on, and it backs off while the page is being scrolled. */
+    let k = 0;
     const token = (fl.buildToken = {});
-    let timer = 0, lastNote = 0, lastTouch = 0;
-    const touch = () => { lastTouch = Date.now(); };
-    ['scroll', 'touchmove', 'wheel'].forEach(ev => window.addEventListener(ev, touch, { passive: true, capture: true }));
-    const want = () => { try { return wantFn ? wantFn() : { iso: true, ent: true, vol: true }; } catch (e) { return { iso: true, ent: true, vol: true }; } };
-    const next = () => {
-      if (Q.prep.length) return Q.prep;
-      const w = want();
-      for (const l of ['iso', 'ent', 'vol']) if (w[l] && Q[l].length) return Q[l];
-      return null;
-    };
     const step = () => {
-      timer = 0;
-      if (fl.buildToken !== token) { ['scroll', 'touchmove', 'wheel'].forEach(ev => window.removeEventListener(ev, touch, { capture: true })); return; }
-      if (Date.now() - lastTouch < 350) { timer = setTimeout(step, 120); return; }
-      const t0 = Date.now(); let did = false;
-      for (let qu = next(); qu && Date.now() - t0 < 12; qu = next()) { const job = qu.shift(); try { job(); } catch (e) { /* skip this line */ } did = true; }
-      const more = next();
-      if (notify && did && (!more || Date.now() - lastNote > 400)) { lastNote = Date.now(); notify(); }
-      if (more) timer = setTimeout(step, 40);
+      if (fl.buildToken !== token) return;
+      const t0 = Date.now();
+      while (k < tasks.length && Date.now() - t0 < 30) { try { tasks[k](); } catch (e) { /* skip this line */ } k++; }
+      if (notify) notify();
+      if (k < tasks.length) setTimeout(step, 0);
     };
-    fl.kick = () => { if (!timer && fl.buildToken === token && next()) timer = setTimeout(step, 0); };
-    timer = setTimeout(step, 0);
+    setTimeout(step, 0);
     return L;
   }
 
-  return { setAPI, setErrFn, supports, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat };
+  return { setAPI, supports, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat };
 })(BI);
 
 
@@ -1063,9 +996,7 @@ let MD = (function () {
     if (st.cp && CPE.supports(id)) { try { st.fluidErr = ''; return CPE.get(id, ref); } catch (e) { st.fluidErr = id + ': ' + (e && e.message ? e.message : String(e)); } }
     return BI.get(id, ref);
   };
-  F.wantFn = null;
-  F.kick = fl => { if (fl && fl.kick) fl.kick(); };
-  F.buildLines = fl => isCP(fl) ? CPE.buildLines(fl, () => { if (F.onLines) F.onLines(); }, () => F.wantFn ? F.wantFn() : null) : BI.buildLines(fl);
+  F.buildLines = fl => isCP(fl) ? CPE.buildLines(fl, () => { if (F.onLines) F.onLines(); }) : BI.buildLines(fl);
   F.cycleFromPoints = (fl, p) => isCP(fl) ? CPE.cycleFromPoints(fl, p) : BI.cycleFromPoints(fl, p);
   F.compressionPath = (fl, c, eta, n) => isCP(fl) ? CPE.compressionPath(fl, c, eta, n) : BI.compressionPath(fl, c, eta, n);
   F.stateAtPH = (fl, P, h, x) => isCP(fl) ? CPE.stateAtPH(fl, P, h) : BI.stateAtPH(fl, P, h, x);
@@ -1091,42 +1022,8 @@ let MD = (function () {
     if (!(h2 > h && (h2 - h) / 20 > 800 && (h2 - h) / 20 < 1500)) throw new Error('enthalpy of R134a vapour looks wrong');
     CPE.get('R134a', 'IIR');
   }
-  F.diagnose = function () {
-    const api = (a, b, c, d, e, g) => window.__cpRaw(a, b, c, d, e, g);
-    const M = window.__cpModule || {};
-    const out = [];
-    const keys = Object.keys(M).filter(k => /mix|get_|set_|props|phase|hum|param|err/i.test(k)).slice(0, 14);
-    out.push('Functions: ' + (keys.join(', ') || 'none found'));
-    const err = () => { try { return M.get_global_param_string ? String(M.get_global_param_string('errstring')).replace(/\s+/g, ' ').slice(0, 140) : '(no errstring function)'; } catch (e) { return '(errstring failed)'; } };
-    const x32 = 0.697615, x125 = 0.302385, hm = 'HEOS::R32[' + x32 + ']&R125[' + x125 + ']', nm = 'R32[' + x32 + ']&R125[' + x125 + ']';
-    const tests = [
-      ['control: R32 T(P=1 atm,Q=0)', ['T', 'P', 101325, 'Q', 0, 'R32']],
-      ['R410A.mix Tcrit', ['Tcrit', '', 0, '', 0, 'R410A.mix']],
-      ['R410A.mix T(P=1 atm,Q=0)', ['T', 'P', 101325, 'Q', 0, 'R410A.mix']],
-      ['R410A.mix H(T=300,P=1 atm)', ['H', 'T', 300, 'P', 101325, 'R410A.mix']],
-      ['HEOS mix Tcrit', ['Tcrit', '', 0, '', 0, hm]],
-      ['HEOS mix T(P=1 atm,Q=0)', ['T', 'P', 101325, 'Q', 0, hm]],
-      ['HEOS mix T(P=1 atm,Q=1)', ['T', 'P', 101325, 'Q', 1, hm]],
-      ['HEOS mix T(P=10 bar,Q=0)', ['T', 'P', 1e6, 'Q', 0, hm]],
-      ['HEOS mix P(T=273.15,Q=0)', ['P', 'T', 273.15, 'Q', 0, hm]],
-      ['HEOS mix H(T=300,P=1 atm)', ['H', 'T', 300, 'P', 101325, hm]],
-      ['no-backend mix T(P=1 atm,Q=0)', ['T', 'P', 101325, 'Q', 0, nm]]
-    ];
-    tests.forEach(t => {
-      let r; try { r = api.apply(null, t[1]); } catch (e) { r = 'threw ' + (e && e.message ? e.message : e); }
-      const ok = typeof r === 'number' && isFinite(r);
-      out.push((ok ? 'OK   ' : 'FAIL ') + t[0] + ' = ' + (ok ? +r.toPrecision(7) : r) + (ok ? '' : ' | ' + err()));
-    });
-    out.push('--- building each blend ---');
-    ['R404A', 'R407C', 'R410A', 'R507A', 'R448A', 'R449A', 'R452A', 'R454B', 'R513A'].forEach(id => {
-      try { const fl = CPE.get(id, 'IIR'); out.push('OK   ' + id + ': ' + fl.tab.n + ' pts, top ' + Math.round(fl.Pc) + ' kPa' + (fl.truncated ? ' (trimmed)' : '')); }
-      catch (e) { out.push('FAIL ' + id + ': ' + String(e && e.message || e).slice(0, 150)); }
-    });
-    return out.join('\n');
-  };
-  F.useCoolProp = function (api, errFn) {
-    window.__cpRaw = api;
-    try { selfCheck(api); CPE.setErrFn(errFn || null); st.cp = true; st.status = 'coolprop'; st.detail = ''; }
+  F.useCoolProp = function (api) {
+    try { selfCheck(api); st.cp = true; st.status = 'coolprop'; st.detail = ''; }
     catch (e) { st.cp = false; st.status = 'failed'; st.detail = e && e.message ? e.message : String(e); }
     if (F.onEngine) F.onEngine();
     return st.cp;
@@ -1143,9 +1040,8 @@ let MD = (function () {
       const fac = mod.default || mod.Module || Object.values(mod).find(v => typeof v === 'function');
       if (typeof fac !== 'function') throw new Error('coolprop.js exports: ' + Object.keys(mod).join(', '));
       const M = await withTimeout(Promise.resolve(fac({})), 40000, 'CoolProp took too long to start (is coolprop.wasm next to index.html?)');
-      window.__cpModule = M;
       if (!M || typeof M.PropsSI !== 'function') throw new Error('CoolProp started but has no PropsSI. It has: ' + Object.keys(M || {}).slice(0, 6).join(', '));
-      F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f), () => M.get_global_param_string ? M.get_global_param_string('errstring') : '');
+      F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f));
     }).catch(err => {
       const m = String(err && err.message || err);
       if (/SyntaxError|import|export|Unexpected|Failed to fetch dynamically|error loading dynamically/i.test(m) && !/too long|no PropsSI|exports:/.test(m)) loadClassic(m);
@@ -1179,7 +1075,7 @@ let MD = (function () {
     const t0 = Date.now();
     const iv = setInterval(() => {
       const M = window.Module;
-      if (M && typeof M.PropsSI === 'function') { window.__cpModule = M; } if (M && typeof M.PropsSI === 'function') fin(() => F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f), () => M.get_global_param_string ? M.get_global_param_string('errstring') : ''));
+      if (M && typeof M.PropsSI === 'function') fin(() => F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f)));
       else if (Date.now() - t0 > 20000) fin(() => diagnose());
     }, 150);
     document.head.appendChild(s);
@@ -1270,7 +1166,6 @@ let MD = (function () {
     cur.fl = MD.get(id, S.ref);
     if (!cur.fl.lines) MD.buildLines(cur.fl);
     const f = cur.fl;
-    updateBadge();
     $('fluidMeta').textContent = f.note + ' \u00B7 critical ' + C2(f.Tc).toFixed(1) + ' \u00B0C, ' + barA(f.Pc) + ' bar a';
     const gl = f.glide >= 1;
     $('fluidWarn').textContent = gl ? 'Temperature glide is about ' + f.glide + ' K. Superheat is measured from the dew point and subcooling from the bubble point. ' + (f.warn || '') : (f.warn || 'The ideal-gas heat capacity for this fluid is estimated, so enthalpy differences are less certain than for the other fluids.');
@@ -1301,16 +1196,7 @@ let MD = (function () {
       MD.DEFS.filter(d => d.grp === g).forEach(d => { const o = document.createElement('option'); o.value = d.id; o.textContent = d.name; og.appendChild(o); });
       sel.appendChild(og);
     });
-    let pend = 0;
-    const later = (label, fn) => {   /* let the picker close and show the new choice before the heavy calculation runs */
-      const id = ++pend, b = $('engBadge');
-      b.textContent = 'Calculating ' + label + '\u2026'; b.className = 'eng warn'; b.hidden = false;
-      requestAnimationFrame(() => setTimeout(() => { if (id === pend) fn(); }, 30));
-    };
-    sel.addEventListener('change', () => {
-      const v = sel.value, d = MD.DEFS.find(x => x.id === v);
-      later(d ? d.name : v, () => { cur.probe = null; cur.sticky = false; selectFluid(v); syncInputs(); recompute(true); });
-    });
+    sel.addEventListener('change', () => { cur.probe = null; cur.sticky = false; selectFluid(sel.value); syncInputs(); recompute(true); });
     Object.keys(NUM).forEach(id => {
       $(id).addEventListener('input', () => { S[NUM[id]] = parseFloat($(id).value); S.touched = true; $('exNote').hidden = true; $('btnExample').hidden = false; recompute(false); });
     });
@@ -1321,9 +1207,9 @@ let MD = (function () {
       S.pu = $('puSel').value; syncInputs(); recompute(false);
     });
     $('btnExample').addEventListener('click', () => { fillExample(); syncInputs(); recompute(true); });
-    $('refSel').addEventListener('change', () => { const v = $('refSel').value; later('reference state', () => { S.ref = v; selectFluid(S.fluid); recompute(true); }); });
+    $('refSel').addEventListener('change', () => { S.ref = $('refSel').value; selectFluid(S.fluid); recompute(true); });
     [['lyIso', 'iso'], ['lyEnt', 'ent'], ['lyVol', 'vol'], ['lyQual', 'qual']].forEach(([id, k]) => {
-      $(id).addEventListener('change', () => { S.ly[k] = $(id).checked; draw(); save(); MD.kick(cur.fl); });
+      $(id).addEventListener('change', () => { S.ly[k] = $(id).checked; draw(); save(); });
     });
     $('btnFit').addEventListener('click', () => { fitView(); draw(); });
     $('btnFull').addEventListener('click', () => { resetView(); draw(); });
@@ -1965,25 +1851,19 @@ let MD = (function () {
   function updateBadge() {
     const b = $('engBadge'), st = MD.state;
     let t, c;
-    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (cur.fl && cur.fl.grp === 'Blends' && !st.fluidErr ? 'Properties: built-in model (used for blends)' : 'Properties: built-in model for this fluid' + (st.fluidErr ? ' (CoolProp: ' + st.fluidErr + ')' : '')); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
+    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : 'Properties: built-in model for this fluid' + (st.fluidErr ? ' (CoolProp: ' + st.fluidErr + ')' : ''); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
     else if (st.status === 'loading') { t = 'Properties: built-in model, loading CoolProp\u2026'; c = 'warn'; }
     else if (st.status === 'failed') { t = 'Properties: built-in model (CoolProp failed its self-check)'; c = 'bad'; }
     else { t = 'Properties: built-in model (CoolProp not loaded)'; c = 'warn'; }
     if (st.detail && st.status !== 'coolprop') t += ' \u2014 ' + st.detail;
     b.textContent = t; b.className = 'eng ' + c; b.title = st.detail || '';
     b.hidden = false;
-    $('btnDiag').hidden = !(st.status === 'coolprop' && location.hash === '#diag');
   }
 
   /* ---------- start ---------- */
   function init() {
     MD.onEngine = () => { cur.probe = null; cur.sticky = false; selectFluid(S.fluid); syncInputs(); recompute(true); updateBadge(); };
     MD.onLines = () => draw();
-    MD.wantFn = () => S.ly;
-    $('btnDiag').addEventListener('click', () => {
-      const pre = $('cpDiag'); pre.hidden = false; pre.textContent = 'Testing\u2026';
-      setTimeout(() => { try { pre.textContent = MD.diagnose(); } catch (e) { pre.textContent = 'Test failed: ' + (e && e.message); } }, 30);
-    });
     bindInputs();
     initPdf();
     selectFluid(S.fluid);
