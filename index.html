@@ -75,7 +75,7 @@ select:focus-visible, input:focus-visible, button:focus-visible, .chip input:foc
 .warnnote { margin: 0; font-size: 12px; color: var(--ink-2); border-left: 3px solid var(--c-vol); padding-left: 8px; }
 .pt { display: grid; gap: 6px; }
 .pt > b { font: 600 13px var(--f-body); }
-.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; }
 .f { display: grid; gap: 3px; min-width: 0; }
 .f > span { font-size: 12px; color: var(--ink-2); }
 .inp { position: relative; display: block; }
@@ -1232,6 +1232,12 @@ let MD = (function () {
 
   const MONO = '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
   const SANS = '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif';
+  let colCache = null, colKey = '';
+  function colorsOnce() {
+    let k = ''; try { k = (document.documentElement.getAttribute('data-theme') || '') + (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches); } catch (e) { /* ignore */ }
+    if (!colCache || k !== colKey) { colCache = colors(); colKey = k; }
+    return colCache;
+  }
   function colors() {
     const cs = getComputedStyle(document.documentElement);
     const g = n => (cs.getPropertyValue(n) || '').trim() || '#888';
@@ -1527,17 +1533,18 @@ let MD = (function () {
   function draw(o) {
     const fl = cur.fl, cv = o ? o.cv : $('cv');
     if (!fl || !view) return;
-    const dpr = o ? o.dpr : (window.devicePixelRatio || 1), W = o ? o.W : cv.clientWidth, H = o ? o.H : cv.clientHeight;
+    const dpr = o ? o.dpr : Math.min(window.devicePixelRatio || 1, 2), W = o ? o.W : cv.clientWidth, H = o ? o.H : cv.clientHeight;
     if (!W || !H) return;
     if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
     const ctx = cv.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const C = o ? o.C : colors();
+    const C = o ? o.C : colorsOnce();
     ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
     const m = { l: W < 520 ? 42 : 52, r: 10, t: 10, b: 36 };
     const pw = W - m.l - m.r, ph = H - m.t - m.b;
     const fx = h => m.l + (h - view.h0) / (view.h1 - view.h0) * pw;
     const fy = P => m.t + (view.lp1 - Math.log(P)) / (view.lp1 - view.lp0) * ph;
+    if (!o) drawnView = Object.assign({}, view);
     geo = { m, pw, ph, W, H, fx, fy, inv: { h: x => view.h0 + (x - m.l) / pw * (view.h1 - view.h0), P: y => Math.exp(view.lp1 - (y - m.t) / ph * (view.lp1 - view.lp0)) } };
     ctx.textBaseline = 'middle'; ctx.font = '400 11px ' + MONO;
 
@@ -1682,6 +1689,38 @@ let MD = (function () {
   }
   function schedule() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); }
 
+  /* While panning or zooming, move a snapshot of the last full picture instead of redrawing every line; redraw properly once the gesture settles. */
+  let snap = null, gTimer = 0, gRaf = 0;
+  function gesture() {
+    if (!snap && geo) {
+      const cv = $('cv');
+      try {
+        const sc = document.createElement('canvas'); sc.width = cv.width; sc.height = cv.height;
+        sc.getContext('2d').drawImage(cv, 0, 0);
+        snap = { cv: sc, v: Object.assign({}, drawnView || view), geo, dpr: cv.width / cv.clientWidth };
+      } catch (e) { snap = null; }
+    }
+    if (!snap) { schedule(); return; }
+    if (!gRaf) gRaf = requestAnimationFrame(() => { gRaf = 0; drawSnap(); });
+    clearTimeout(gTimer);
+    gTimer = setTimeout(() => { snap = null; draw(); }, 160);
+  }
+  function drawSnap() {
+    if (!snap) return;
+    const cv = $('cv'), ctx = cv.getContext('2d'), g = snap.geo, sv = snap.v, d = snap.dpr, m = g.m;
+    const kx = (sv.h1 - sv.h0) / (view.h1 - view.h0), ky = (sv.lp1 - sv.lp0) / (view.lp1 - view.lp0);
+    const tx = (sv.h0 - view.h0) / (view.h1 - view.h0) * g.pw, ty = (view.lp1 - sv.lp1) / (view.lp1 - view.lp0) * g.ph;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = colorsOnce().bg; ctx.fillRect(m.l * d, m.t * d, g.pw * d, g.ph * d);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(m.l * d, m.t * d, g.pw * d, g.ph * d); ctx.clip();
+    ctx.setTransform(d * kx, 0, 0, d * ky, d * (m.l * (1 - kx) + tx), d * (m.t * (1 - ky) + ty));
+    ctx.drawImage(snap.cv, 0, 0, g.W, g.H);
+    ctx.restore();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  let drawnView = null;
+
   /* ---------- pointer interaction ---------- */
   function bindPointer() {
     const cv = $('cv'), ptrs = new Map();
@@ -1724,13 +1763,13 @@ let MD = (function () {
       if (g.mode === 'wait' && Math.abs(p.x - g.x) + Math.abs(p.y - g.y) > TOL) { clearTimeout(timer); g.mode = 'pan'; }
       if (g.mode === 'pan') {
         const dh = -(p.x - g.x) / geo.pw * sh, dl = (p.y - g.y) / geo.ph * sl;
-        view = clampView({ h0: g.v0.h0 + dh, h1: g.v0.h1 + dh, lp0: g.v0.lp0 + dl, lp1: g.v0.lp1 + dl }); schedule();
+        view = clampView({ h0: g.v0.h0 + dh, h1: g.v0.h1 + dh, lp0: g.v0.lp0 + dl, lp1: g.v0.lp1 + dl }); gesture();
       } else if (g.mode === 'zoom' && ptrs.size === 2) {
         const a = Array.from(ptrs.values());
         const d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1, f = g.d0 / d, mx = (a[0].x + a[1].x) / 2, my = (a[0].y + a[1].y) / 2;
         const ah = g.v0.h0 + (g.mx - geo.m.l) / geo.pw * sh, al = g.v0.lp1 - (g.my - geo.m.t) / geo.ph * sl;
         const nh = sh * f, nl = sl * f, h0 = ah - (mx - geo.m.l) / geo.pw * nh, lp1 = al + (my - geo.m.t) / geo.ph * nl;
-        view = clampView({ h0, h1: h0 + nh, lp0: lp1 - nl, lp1 }); schedule();
+        view = clampView({ h0, h1: h0 + nh, lp0: lp1 - nl, lp1 }); gesture();
       }
     });
     const end = e => {
@@ -1753,7 +1792,7 @@ let MD = (function () {
       if (p.x < geo.m.l || p.x > geo.m.l + geo.pw || p.y < geo.m.t || p.y > geo.m.t + geo.ph) return;
       const f = Math.exp(e.deltaY * 0.0015), ah = geo.inv.h(p.x), al = Math.log(geo.inv.P(p.y)), fh = (p.x - geo.m.l) / geo.pw, fl2 = (p.y - geo.m.t) / geo.ph;
       const nh = (view.h1 - view.h0) * f, nl = (view.lp1 - view.lp0) * f;
-      view = clampView({ h0: ah - fh * nh, h1: ah - fh * nh + nh, lp1: al + fl2 * nl, lp0: al + fl2 * nl - nl }); schedule();
+      view = clampView({ h0: ah - fh * nh, h1: ah - fh * nh + nh, lp1: al + fl2 * nl, lp0: al + fl2 * nl - nl }); gesture();
     }, { passive: false });
     cv.addEventListener('dblclick', () => { fitView(); schedule(); });
   }
