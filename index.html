@@ -9,8 +9,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Mollier Desk">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<style>:root{color-scheme:light}body{margin:0;font-size:14px}img{max-width:100%}[hidden]{display:none!important}</style>
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<style>:root{color-scheme:light}body{margin:0;font-size:14px}img{max-width:100%}[hidden]{display:none!important}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}</style>
 </head>
 <body>
 <title>Mollier Desk</title>
@@ -69,7 +69,7 @@ select:focus-visible, input:focus-visible, button:focus-visible, .chip input:foc
 .meta { margin: 0; font-size: 12px; color: var(--ink-2); }
 .fl { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .sat { font-size: 11px; font-family: var(--f-mono); color: var(--ink-2); font-weight: 400; text-align: right; }
-.eng { margin: 0; font-size: 11px; font-family: var(--f-mono); padding: 3px 8px; border-radius: 999px; display: inline-block; border: 1px solid var(--line, currentColor); color: var(--ink-2); }
+.eng { margin: 0; font-size: 11px; font-family: var(--f-mono); padding: 3px 8px; border-radius: 14px; display: block; box-sizing: border-box; max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; border: 1px solid var(--line, currentColor); color: var(--ink-2); }
 .eng.ok { color: var(--c-sc); }
 .eng.bad { color: var(--c-sh); }
 .warnnote { margin: 0; font-size: 12px; color: var(--ink-2); border-left: 3px solid var(--c-vol); padding-left: 8px; }
@@ -169,6 +169,8 @@ details p { margin: 8px 0 0; max-width: 78ch; }
         <p class="meta" id="fluidMeta"></p>
         <p class="warnnote" id="fluidWarn" hidden></p>
         <p class="eng warn" id="engBadge" hidden></p>
+        <button type="button" class="btn" id="btnDiag" hidden style="margin-top:8px">Test CoolProp on blends</button>
+        <pre id="cpDiag" hidden style="margin:8px 0 0;font:11px/1.45 var(--f-mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)"></pre>
       </div>
 
       <div class="grp">
@@ -740,7 +742,7 @@ const BI = (function () {
 const CPE = (function (BI) {
   'use strict';
   let API = null;
-  function setAPI(f) { API = f; }
+  function setAPI(f, ef) { API = f; if (ef !== undefined) errFn = ef; }
   const NAMES = {
     R134a: 'R134a', R1234yf: 'R1234yf', R1234ze: 'R1234ze(E)', R32: 'R32', R125: 'R125', R143a: 'R143a', R152a: 'R152A', R23: 'R23',
     R245fa: 'R245fa', R1233zd: 'R1233zd(E)', R22: 'R22', R600: 'n-Butane', R600a: 'IsoButane', R290: 'Propane', R1270: 'Propylene',
@@ -755,9 +757,17 @@ const CPE = (function (BI) {
     R513A: { R1234yf: 56, R134a: 44 }
   };
   const cache = {};
+  let errFn = null;
+  function setErrFn(f) { errFn = f; }
+  const short = f => String(f).replace(/HEOS::/, '').replace(/\[(\d\.\d{2})\d*\]/g, '[$1]').slice(0, 40);
   const q = (out, k1, v1, k2, v2, f) => {
     const r = API(out, k1, v1, k2, v2, f);
-    if (typeof r !== 'number' || !isFinite(r) || Math.abs(r) > 1e300) throw new Error('CoolProp could not work out ' + out + ' for ' + f);
+    if (typeof r !== 'number' || !isFinite(r) || Math.abs(r) > 1e300) {
+      let why = '';
+      try { if (errFn) why = String(errFn() || '').replace(/\s+/g, ' ').slice(0, 110); } catch (e) { /* none */ }
+      const num = x => typeof x === 'number' ? +x.toPrecision(6) : x;
+      throw new Error(out + (k1 ? ' from ' + k1 + '=' + num(v1) + ', ' + k2 + '=' + num(v2) : '') + ' for ' + short(f) + (why ? ': ' + why : ''));
+    }
     return r;
   };
   function mixString(id) {
@@ -791,13 +801,24 @@ const CPE = (function (BI) {
     const f = fl.cpName, N = 200;
     const Pmin = q('P', 'T', fl.tmin, 'Q', 0, f) / 1000, Ptop = fl.Pc * 0.9992;
     const T = [], P = [], hf = [], hg = [], sf = [], sg = [], vf = [], vg = [];
+    let lastErr = null, lastS = null;
     for (let i = 0; i < N; i++) {
       const u = 1 - Math.pow(1 - i / (N - 1), 2), p = Math.exp(Math.log(Pmin) + (Math.log(Ptop) - Math.log(Pmin)) * u);
-      const s = sat(fl, p);
+      let s;
+      try { s = sat(fl, p); } catch (e) { lastErr = e; continue; }   /* a few points can fail for blends near the critical point */
+      if (!s || !(s.Td >= s.Tb - 1e-6) || !(s.hg > s.hf)) { lastErr = lastErr || new Error('odd saturation values at ' + p.toFixed(0) + ' kPa'); continue; }
+      lastS = s;
       T.push(s.Tb); P.push(p); hf.push(s.hf); hg.push(s.hg); sf.push(s.sf); sg.push(s.sg); vf.push(s.vf); vg.push(s.vg);
     }
-    const hc = (hf[N - 1] + hg[N - 1]) / 2;
-    T.push(fl.Tc); P.push(fl.Pc); hf.push(hc); hg.push(hc); sf.push((sf[N - 1] + sg[N - 1]) / 2); sg.push((sf[N - 1] + sg[N - 1]) / 2); vf.push((vf[N - 1] + vg[N - 1]) / 2); vg.push((vf[N - 1] + vg[N - 1]) / 2);
+    if (T.length < 40) throw lastErr || new Error('saturation table could not be built');
+    const n = T.length, topP = P[n - 1];
+    if (topP < fl.Pc * 0.99) {
+      /* blend: take the top of the usable dome as the critical region */
+      fl.Pc = topP * 1.0005; fl.Tc = Math.max(lastS.Td, lastS.Tb) + 0.05; fl.truncated = true;
+    } else {
+      const hc = (hf[n - 1] + hg[n - 1]) / 2, sc = (sf[n - 1] + sg[n - 1]) / 2, vc = (vf[n - 1] + vg[n - 1]) / 2;
+      T.push(fl.Tc); P.push(fl.Pc); hf.push(hc); hg.push(hc); sf.push(sc); sg.push(sc); vf.push(vc); vg.push(vc);
+    }
     fl.tab = { n: T.length, T, P, hf, hg, sf, sg, vf, vg, lnP: P.map(Math.log) };
     const Pmax = fl.Pc * 1.5, Pl = P[0] * 0.85;
     const hL = q('H', 'T', fl.tmin, 'P', Pmax * 1000, f) / 1000 + fl.hOff;
@@ -983,7 +1004,7 @@ const CPE = (function (BI) {
     return L;
   }
 
-  return { setAPI, supports, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat };
+  return { setAPI, setErrFn, supports, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat };
 })(BI);
 
 
@@ -1022,8 +1043,37 @@ let MD = (function () {
     if (!(h2 > h && (h2 - h) / 20 > 800 && (h2 - h) / 20 < 1500)) throw new Error('enthalpy of R134a vapour looks wrong');
     CPE.get('R134a', 'IIR');
   }
-  F.useCoolProp = function (api) {
-    try { selfCheck(api); st.cp = true; st.status = 'coolprop'; st.detail = ''; }
+  F.diagnose = function () {
+    const api = (a, b, c, d, e, g) => window.__cpRaw(a, b, c, d, e, g);
+    const M = window.__cpModule || {};
+    const out = [];
+    const keys = Object.keys(M).filter(k => /mix|get_|set_|props|phase|hum|param|err/i.test(k)).slice(0, 14);
+    out.push('Functions: ' + (keys.join(', ') || 'none found'));
+    const err = () => { try { return M.get_global_param_string ? String(M.get_global_param_string('errstring')).replace(/\s+/g, ' ').slice(0, 140) : '(no errstring function)'; } catch (e) { return '(errstring failed)'; } };
+    const x32 = 0.697615, x125 = 0.302385, hm = 'HEOS::R32[' + x32 + ']&R125[' + x125 + ']', nm = 'R32[' + x32 + ']&R125[' + x125 + ']';
+    const tests = [
+      ['control: R32 T(P=1 atm,Q=0)', ['T', 'P', 101325, 'Q', 0, 'R32']],
+      ['R410A.mix Tcrit', ['Tcrit', '', 0, '', 0, 'R410A.mix']],
+      ['R410A.mix T(P=1 atm,Q=0)', ['T', 'P', 101325, 'Q', 0, 'R410A.mix']],
+      ['R410A.mix H(T=300,P=1 atm)', ['H', 'T', 300, 'P', 101325, 'R410A.mix']],
+      ['HEOS mix Tcrit', ['Tcrit', '', 0, '', 0, hm]],
+      ['HEOS mix T(P=1 atm,Q=0)', ['T', 'P', 101325, 'Q', 0, hm]],
+      ['HEOS mix T(P=1 atm,Q=1)', ['T', 'P', 101325, 'Q', 1, hm]],
+      ['HEOS mix T(P=10 bar,Q=0)', ['T', 'P', 1e6, 'Q', 0, hm]],
+      ['HEOS mix P(T=273.15,Q=0)', ['P', 'T', 273.15, 'Q', 0, hm]],
+      ['HEOS mix H(T=300,P=1 atm)', ['H', 'T', 300, 'P', 101325, hm]],
+      ['no-backend mix T(P=1 atm,Q=0)', ['T', 'P', 101325, 'Q', 0, nm]]
+    ];
+    tests.forEach(t => {
+      let r; try { r = api.apply(null, t[1]); } catch (e) { r = 'threw ' + (e && e.message ? e.message : e); }
+      const ok = typeof r === 'number' && isFinite(r);
+      out.push((ok ? 'OK   ' : 'FAIL ') + t[0] + ' = ' + (ok ? +r.toPrecision(7) : r) + (ok ? '' : ' | ' + err()));
+    });
+    return out.join('\n');
+  };
+  F.useCoolProp = function (api, errFn) {
+    window.__cpRaw = api;
+    try { selfCheck(api); CPE.setErrFn(errFn || null); st.cp = true; st.status = 'coolprop'; st.detail = ''; }
     catch (e) { st.cp = false; st.status = 'failed'; st.detail = e && e.message ? e.message : String(e); }
     if (F.onEngine) F.onEngine();
     return st.cp;
@@ -1040,8 +1090,9 @@ let MD = (function () {
       const fac = mod.default || mod.Module || Object.values(mod).find(v => typeof v === 'function');
       if (typeof fac !== 'function') throw new Error('coolprop.js exports: ' + Object.keys(mod).join(', '));
       const M = await withTimeout(Promise.resolve(fac({})), 40000, 'CoolProp took too long to start (is coolprop.wasm next to index.html?)');
+      window.__cpModule = M;
       if (!M || typeof M.PropsSI !== 'function') throw new Error('CoolProp started but has no PropsSI. It has: ' + Object.keys(M || {}).slice(0, 6).join(', '));
-      F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f));
+      F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f), () => M.get_global_param_string ? M.get_global_param_string('errstring') : '');
     }).catch(err => {
       const m = String(err && err.message || err);
       if (/SyntaxError|import|export|Unexpected|Failed to fetch dynamically|error loading dynamically/i.test(m) && !/too long|no PropsSI|exports:/.test(m)) loadClassic(m);
@@ -1075,7 +1126,7 @@ let MD = (function () {
     const t0 = Date.now();
     const iv = setInterval(() => {
       const M = window.Module;
-      if (M && typeof M.PropsSI === 'function') fin(() => F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f)));
+      if (M && typeof M.PropsSI === 'function') { window.__cpModule = M; } if (M && typeof M.PropsSI === 'function') fin(() => F.useCoolProp((a, b, c, d, e, f) => M.PropsSI(a, b, c, d, e, f), () => M.get_global_param_string ? M.get_global_param_string('errstring') : ''));
       else if (Date.now() - t0 > 20000) fin(() => diagnose());
     }, 150);
     document.head.appendChild(s);
@@ -1166,6 +1217,7 @@ let MD = (function () {
     cur.fl = MD.get(id, S.ref);
     if (!cur.fl.lines) MD.buildLines(cur.fl);
     const f = cur.fl;
+    updateBadge();
     $('fluidMeta').textContent = f.note + ' \u00B7 critical ' + C2(f.Tc).toFixed(1) + ' \u00B0C, ' + barA(f.Pc) + ' bar a';
     const gl = f.glide >= 1;
     $('fluidWarn').textContent = gl ? 'Temperature glide is about ' + f.glide + ' K. Superheat is measured from the dew point and subcooling from the bubble point. ' + (f.warn || '') : (f.warn || 'The ideal-gas heat capacity for this fluid is estimated, so enthalpy differences are less certain than for the other fluids.');
@@ -1858,12 +1910,17 @@ let MD = (function () {
     if (st.detail && st.status !== 'coolprop') t += ' \u2014 ' + st.detail;
     b.textContent = t; b.className = 'eng ' + c; b.title = st.detail || '';
     b.hidden = false;
+    $('btnDiag').hidden = st.status !== 'coolprop';
   }
 
   /* ---------- start ---------- */
   function init() {
     MD.onEngine = () => { cur.probe = null; cur.sticky = false; selectFluid(S.fluid); syncInputs(); recompute(true); updateBadge(); };
     MD.onLines = () => draw();
+    $('btnDiag').addEventListener('click', () => {
+      const pre = $('cpDiag'); pre.hidden = false; pre.textContent = 'Testing\u2026';
+      setTimeout(() => { try { pre.textContent = MD.diagnose(); } catch (e) { pre.textContent = 'Test failed: ' + (e && e.message); } }, 30);
+    });
     bindInputs();
     initPdf();
     selectFluid(S.fluid);
