@@ -1069,6 +1069,11 @@ let MD = (function () {
       const ok = typeof r === 'number' && isFinite(r);
       out.push((ok ? 'OK   ' : 'FAIL ') + t[0] + ' = ' + (ok ? +r.toPrecision(7) : r) + (ok ? '' : ' | ' + err()));
     });
+    out.push('--- building each blend ---');
+    ['R404A', 'R407C', 'R410A', 'R507A', 'R448A', 'R449A', 'R452A', 'R454B', 'R513A'].forEach(id => {
+      try { const fl = CPE.get(id, 'IIR'); out.push('OK   ' + id + ': ' + fl.tab.n + ' pts, top ' + Math.round(fl.Pc) + ' kPa' + (fl.truncated ? ' (trimmed)' : '')); }
+      catch (e) { out.push('FAIL ' + id + ': ' + String(e && e.message || e).slice(0, 150)); }
+    });
     return out.join('\n');
   };
   F.useCoolProp = function (api, errFn) {
