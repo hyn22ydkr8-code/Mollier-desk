@@ -1,5 +1,5 @@
 /* Mollier Desk offline cache. Bump VERSION to force every device to refresh its copy. */
-const VERSION = 'mollier-v4';
+const VERSION = 'mollier-v5';
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 const HEAVY = ['coolprop.js', 'coolprop.wasm'];
 

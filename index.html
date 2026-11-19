@@ -170,7 +170,7 @@ details p { margin: 8px 0 0; max-width: 78ch; }
         <p class="warnnote" id="fluidWarn" hidden></p>
         <p class="eng warn" id="engBadge" hidden></p>
         <p class="eng" id="prepLine" hidden style="margin-top:6px"></p>
-        <div id="engRow" hidden style="margin-top:8px"><label class="f" for="engSel"><span class="fl">Calculation engine</span><select id="engSel"><option value="auto">Auto: CoolProp for single fluids, built-in for blends</option><option value="cp">CoolProp for everything (blends can be slow)</option><option value="bi">Built-in model for everything</option></select></label></div>
+        <div id="engRow" hidden style="margin-top:8px"><label class="f" for="engSel"><span class="fl">Calculation engine</span><select id="engSel"><option value="auto">CoolProp (recommended)</option><option value="bi">Built-in model</option></select></label></div>
         <button type="button" class="btn" id="btnDiag" hidden style="margin-top:8px">Test CoolProp on blends</button>
         <pre id="cpDiag" hidden style="margin:8px 0 0;font:11px/1.45 var(--f-mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)"></pre>
       </div>
@@ -1045,7 +1045,7 @@ const CPE = (function (BI) {
 
   /* ---------- chart lines, built in small time slices so the page stays responsive ---------- */
   const nice = (range, maxCount, cands) => { for (const c of cands) if (range / c <= maxCount) return c; return cands[cands.length - 1]; };
-  function buildLines(fl, notify, wantFn) {
+  function buildLines(fl, notify, wantFn, opts) {
     const f = fl.cpName, V = fl.view, t = fl.tab, mix = /^HEOS|\.mix$/.test(f), N = mix ? 50 : 70;
     const L = { iso: [], ent: [], vol: [], qual: [] };
     fl.lines = L;
@@ -1056,6 +1056,7 @@ const CPE = (function (BI) {
     }
     const grid = [], sats = [];
     const Q = { prep: [], iso: [], ent: [], vol: [] };
+    const borrow = opts && opts.borrow;
     const H = (T, P) => q('H', 'T', T, 'P', P * 1000, f) / 1000 + fl.hOff;
     Q.prep.push(function* () { for (let i = 0; i < N; i++) { yield; const P = V.Pmin * Math.pow(V.Pmax / V.Pmin, i / (N - 1)); grid.push(P); let s = null; try { s = sat(fl, P); } catch (e) { s = null; } sats.push(s); } });
     const Tlo = Math.ceil((fl.tmin - 273.15) / 10) * 10, Thi = Math.floor((fl.Tc - 273.15 + 70) / 10) * 10;
@@ -1114,6 +1115,29 @@ const CPE = (function (BI) {
       if (cur.length) segs.push(cur);
       if (segs.length) L.vol.push({ val: v, segs });
     }));
+    if (borrow) {   /* blends: reuse the built-in model's iso lines (CoolProp mixtures are too slow for these); dome and readings stay CoolProp */
+      L.iso = borrow.iso; L.ent = borrow.ent; L.vol = borrow.vol; L.borrowed = true;
+      fl.kick = () => {}; fl.buildToken = {};
+      return L;
+    }
+    if (opts && opts.manual) {   /* build everything now (for the report), in short slices so the page keeps responding */
+      fl.kick = () => {}; fl.buildToken = {};
+      const run = layers => new Promise(res => {
+        const jobs = Q.prep.slice(); layers.forEach(l => Q[l].forEach(j => jobs.push(j)));
+        const total = jobs.length; let n = 0, g = null;
+        const loop = () => {
+          const t0 = Date.now();
+          while (Date.now() - t0 < 14) {
+            if (!g) { const j = jobs.shift(); if (!j) { res(); return; } try { g = j(); } catch (e) { g = null; n++; continue; } }
+            try { if (g.next().done) { g = null; n++; } } catch (e) { g = null; n++; }
+          }
+          if (opts.progress) opts.progress(n / total);
+          setTimeout(loop, 8);
+        };
+        loop();
+      });
+      return { L, run };
+    }
     /* Work is done in short slices with gaps, only for the layers switched on, and it backs off while the page is being scrolled. */
     const token = (fl.buildToken = {});
     let timer = 0, lastNote = 0, lastTouch = 0, curGen = null;
@@ -1154,9 +1178,10 @@ let MD = (function () {
   const st = { cp: false, status: 'loading', detail: '' };
   const F = { DEFS: BI.DEFS, state: st, onEngine: null, onLines: null };
   const isCP = fl => !!(fl && fl.viaCP);
-  F.pref = 'auto';   /* auto: CoolProp for single fluids, built-in for blends; cp: CoolProp wherever possible; bi: built-in */
-  const useCP = id => st.cp && CPE.supports(id) && (F.pref === 'cp' || (F.pref === 'auto' && !CPE.isBlend(id)));
+  F.pref = 'auto';   /* auto: CoolProp wherever it can (built-in only while a fluid is still being prepared); bi: built-in */
+  const useCP = id => st.cp && CPE.supports(id) && F.pref !== 'bi';
   F.get = function (id, ref) {
+    if (useCP(id) && !CPE.ready(id) && F.prep.state === 'running' && !F.prep.failed.includes(id)) { st.waiting = id; return BI.get(id, ref); }   /* switch over once it is ready */
     if (useCP(id)) { try { st.fluidErr = ''; return CPE.get(id, ref); } catch (e) { st.fluidErr = id + ': ' + (e && e.message ? e.message : String(e)); } }
     return BI.get(id, ref);
   };
@@ -1167,7 +1192,21 @@ let MD = (function () {
   };
   F.wantFn = null;
   F.kick = fl => { if (fl && fl.kick) fl.kick(); };
-  F.buildLines = fl => isCP(fl) ? CPE.buildLines(fl, () => { if (F.onLines) F.onLines(); }, () => F.wantFn ? F.wantFn() : null) : BI.buildLines(fl);
+  F.buildLines = fl => {
+    if (!isCP(fl)) return BI.buildLines(fl);
+    /* On screen the chart lines come from the built-in model (instant); the dome, readings and results use CoolProp. The PDF uses CoolProp lines. */
+    const bf = BI.get(fl.id, fl.refMode);
+    if (!bf.lines) BI.buildLines(bf);
+    return CPE.buildLines(fl, null, null, { borrow: bf.lines });
+  };
+  /* Every line worked out by CoolProp itself (used for the PDF report). Resolves when done. */
+  F.fullLines = (fl, layers, progress) => {
+    if (!isCP(fl)) return Promise.resolve();
+    const o = CPE.buildLines(fl, null, null, { manual: true, progress });
+    fl.lines = o.L;
+    return o.run(layers);
+  };
+  F.supportsCP = id => CPE.supports(id);
   F.cycleFromPoints = (fl, p) => isCP(fl) ? CPE.cycleFromPoints(fl, p) : BI.cycleFromPoints(fl, p);
   F.compressionPath = (fl, c, eta, n) => isCP(fl) ? CPE.compressionPath(fl, c, eta, n) : BI.compressionPath(fl, c, eta, n);
   F.stateAtPH = (fl, P, h, x) => isCP(fl) ? CPE.stateAtPH(fl, P, h) : BI.stateAtPH(fl, P, h, x);
@@ -1227,21 +1266,25 @@ let MD = (function () {
     return out.join('\n');
   };
   /* Background preload of every fluid, so later switching is instant. */
+  F.firstFn = null;
   F.prep = { state: 'idle', done: 0, total: 0, ms: 0, cached: 0, failed: [] };
   F.onPrep = null;
   F.preload = function (ref) {
     if (!st.cp || window.__NO_PRELOAD || F.prep.state === 'running') return;
     const ids = CPE.ids().filter(id => BI.DEFS.some(d => d.id === id));
-    ids.sort((x, y) => (CPE.isBlend(x) ? 1 : 0) - (CPE.isBlend(y) ? 1 : 0));
+    let first = null; try { first = F.firstFn ? F.firstFn() : null; } catch (e) { first = null; }
+    const rank = x => x === first ? -1 : CPE.isBlend(x) ? 1 : 0;
+    ids.sort((x, y) => rank(x) - rank(y));
     F.prep = { state: 'running', done: 0, total: ids.length, ms: 0, cached: 0, built: 0, failed: [], id: '' };
     CPE.prepare(ids, ref || 'IIR', e => {
       F.prep = { state: e.finished ? 'done' : 'running', done: e.done, total: e.total, ms: e.ms, cached: e.cached, built: e.built, failed: e.failed, id: e.id };
       if (F.onPrep) F.onPrep();
+      if (st.waiting && (CPE.ready(st.waiting) || e.finished || e.failed.includes(st.waiting))) { st.waiting = null; if (F.onEngine) F.onEngine(); }
     });
   };
   F.useCoolProp = function (api, errFn) {
     window.__cpRaw = api;
-    try { selfCheck(api); CPE.setErrFn(errFn || null); st.cp = true; st.status = 'coolprop'; st.detail = ''; setTimeout(() => F.preload(F.prefRef), 400); }
+    try { selfCheck(api); CPE.setErrFn(errFn || null); st.cp = true; st.status = 'coolprop'; st.detail = ''; F.preload(F.prefRef); }
     catch (e) { st.cp = false; st.status = 'failed'; st.detail = e && e.message ? e.message : String(e); }
     if (F.onEngine) F.onEngine();
     return st.cp;
@@ -1322,7 +1365,7 @@ let MD = (function () {
     if (!MD.DEFS.some(d => d.id === S.fluid)) S.fluid = 'R134a';
     if (!PU[S.pu]) S.pu = 'barg';
     S.ly = Object.assign({ iso: true, ent: true, vol: false, qual: true }, S.ly || {});
-    if (['auto', 'cp', 'bi'].indexOf(S.engPref) < 0) S.engPref = 'auto';
+    if (S.engPref !== 'bi') S.engPref = 'auto';
   } catch (e) { /* storage unavailable */ }
   function save() { try { const o = {}; KEYS.forEach(k => { o[k] = S[k]; }); localStorage.setItem(SKEY, JSON.stringify(o)); } catch (e) { /* ignore */ } }
 
@@ -2094,7 +2137,7 @@ let MD = (function () {
     ], cur.pts.map(p => [p.k + '  ' + p.name + (p.meas ? '' : ' (calc.)'), pSel(p.P), num(C2(p.st.T), 1), num(p.st.h, 1), num(p.st.s, 3), vFmt(p.st.v), phaseName(p.st)])) + 18;
     y = head('Method and limits', y) + 12;
     const meth = 'Superheat is suction temperature minus the saturation (dew) temperature at suction pressure. Subcooling is the saturation (bubble) temperature at discharge pressure minus liquid line temperature. Enthalpy and entropy are taken from the measured pressure and temperature at each point, and the expansion valve is treated as a constant-enthalpy throttle. COP is the cooling effect divided by compressor work, using measured discharge conditions. Heat lost from the compressor shell and pipework is not included. Reference state: ' + (S.ref === 'ASHRAE' ? 'ASHRAE (h = 0, s = 0 for saturated liquid at -40 °C)' : 'IIR (h = 200 kJ/kg, s = 1.0 kJ/kg·K for saturated liquid at 0 °C)') + '.\n' +
-      'Fluid properties come from a fitted Peng-Robinson equation of state, not from REFPROP or CoolProp. Expect vapour pressures within about 1 to 2 %, and about 5 % for blends, with enthalpy differences a few percent out. Blends are treated as single fluids with a typical temperature glide. Use this report for service records and comparison, and confirm design-critical figures with reference software or the compressor manufacturer.';
+      (cur.fl.viaCP ? 'Fluid properties come from CoolProp (reference-quality equations of state), with blends treated as true mixtures having separate dew and bubble points. Confirm design-critical figures with the compressor manufacturer.' : 'Fluid properties come from a fitted Peng-Robinson equation of state, not from REFPROP or CoolProp. Expect vapour pressures within about 1 to 2 %, and about 5 % for blends, with enthalpy differences a few percent out. Blends are treated as single fluids with a typical temperature glide. Use this report for service records and comparison, and confirm design-critical figures with reference software or the compressor manufacturer.');
     wrap(meth, CW, 8.5).forEach(l => { d.text(l, L, y, { size: 8.5, color: '#455662' }); y += 11.5; });
 
     const n = d.count();
@@ -2107,19 +2150,54 @@ let MD = (function () {
     return d.finish('Refrigeration system report ' + fl.name);
   }
   function pdfMsg(t) { $('pdfMsg').textContent = t || ''; }
+  let busy = false;
   async function makeReport() {
-    if (!dl) return;
+    if (!dl || busy) return;
     if (!cur.cyc) { pdfMsg('Enter valid readings first so there is a cycle to report.'); return; }
+    busy = true;
     pdfMsg('Building the report…');
+    /* On the standalone site the PDF opens in a new tab. The tab has to be opened now, while the tap is still being handled. */
+    let tab = null;
+    if (dl.newTab) {
+      try { tab = window.open('', '_blank'); } catch (e) { tab = null; }
+      if (tab) try { tab.document.write('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mollier Desk report</title><body style="font:16px -apple-system,system-ui,sans-serif;padding:24px;color:#455662">Preparing the report\u2026</body>'); tab.document.close(); } catch (e) { /* ignore */ }
+    }
+    const keep = { fl: cur.fl, cyc: cur.cyc, comp: cur.comp, pts: cur.pts, pref: MD.pref, v: view, g: geo };
     try {
+      await new Promise(r => setTimeout(r, 40));
+      /* The report always uses CoolProp (when it is running), with every line worked out by it. */
+      if (MD.state.cp && MD.supportsCP(cur.fl.id)) {
+        try {
+          MD.pref = 'cp';
+          const fl2 = MD.get(S.fluid, S.ref);
+          if (fl2.viaCP) {
+            keep.fl2 = fl2; keep.l2 = fl2.lines;
+            const layers = ['iso', 'ent', 'vol'].filter(k => S.ly[k]);
+            await MD.fullLines(fl2, layers, f => pdfMsg('Working out chart lines with CoolProp: ' + Math.round(f * 100) + ' %'));
+            cur.fl = fl2;
+            const c = MD.cycleFromPoints(fl2, { Ps: PU[S.pu].t(S.Ps), Pd: PU[S.pu].t(S.Pd), Ts: S.Ts + 273.15, Td: S.Td + 273.15, T3: S.T3 + 273.15 });
+            if (c.ok) { cur.cyc = c; cur.comp = MD.compressionPath(fl2, c, Math.min(1, Math.max(0.05, c.eta)), 40); buildPts(); }
+            else cur.fl = keep.fl;
+          }
+        } catch (e) { cur.fl = keep.fl; cur.cyc = keep.cyc; cur.comp = keep.comp; cur.pts = keep.pts; }
+        finally { MD.pref = keep.pref; }
+      }
+      pdfMsg('Building the report…');
+      await new Promise(r => setTimeout(r, 20));
       const bytes = buildReport();
       const safe = (cur.fl.name || 'report').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const day = new Date(), p2 = v => String(v).padStart(2, '0');
-      const r = await dl.save({ filename: 'Mollier-Desk-' + safe + '-' + day.getFullYear() + '-' + p2(day.getMonth() + 1) + '-' + p2(day.getDate()) + '.pdf', data: bytes });
-      pdfMsg(r && r.status === 'delivered' ? 'Report delivered.' : 'Report saved.');
+      const r = await dl.save({ filename: 'Mollier-Desk-' + safe + '-' + day.getFullYear() + '-' + p2(day.getMonth() + 1) + '-' + p2(day.getDate()) + '.pdf', data: bytes, tab });
+      pdfMsg(r && r.status === 'opened' ? 'Report opened in a new tab.' : r && r.status === 'delivered' ? 'Report delivered.' : 'Report saved.');
     } catch (e) {
       const code = e && e.code;
       pdfMsg(code === 'declined' ? 'Save cancelled.' : code === 'rate_limited' ? 'A save prompt is already open. Answer it, then try again.' : 'The PDF could not be saved' + (e && e.message ? ': ' + e.message : '.'));
+      if (tab) try { tab.close(); } catch (x) { /* ignore */ }
+    } finally {
+      busy = false;
+      cur.fl = keep.fl; cur.cyc = keep.cyc; cur.comp = keep.comp; cur.pts = keep.pts; MD.pref = keep.pref; view = keep.v; geo = keep.g;
+      if (keep.fl2) keep.fl2.lines = keep.l2;
+      draw();
     }
   }
   function initPdf() {
@@ -2127,11 +2205,17 @@ let MD = (function () {
     ['inpSite', 'inpEng', 'inpNotes'].forEach(id => $(id).addEventListener('input', () => { S[{ inpSite: 'site', inpEng: 'eng', inpNotes: 'notes' }[id]] = $(id).value; save(); }));
     try {
       if (window.claude && window.claude.use) window.claude.use('downloads').then(x => { dl = x; $('pdfGrp').hidden = !x; $('btnPdf2').hidden = !x; }, () => { /* unavailable */ });
- } catch (e) { /* unavailable */ }
-    if (!(window.claude && window.claude.use)) {
+    } catch (e) { /* unavailable */ }
+    if (!(window.claude && window.claude.use)) {   /* standalone site: open the PDF in a new tab, or download it if tabs are blocked */
       dl = {
+        newTab: true,
         save: async r => {
           const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
+          if (r.tab && !r.tab.closed) {
+            r.tab.location.href = url;
+            setTimeout(() => URL.revokeObjectURL(url), 600000);
+            return { status: 'opened' };
+          }
           const a = document.createElement('a'); a.href = url; a.download = r.filename; document.body.appendChild(a); a.click(); a.remove();
           setTimeout(() => URL.revokeObjectURL(url), 4000);
           return { status: 'saved' };
@@ -2145,7 +2229,7 @@ let MD = (function () {
   function updateBadge() {
     const b = $('engBadge'), st = MD.state;
     let t, c;
-    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (st.fluidErr ? 'Properties: built-in model for this fluid (CoolProp: ' + st.fluidErr + ')' : S.engPref === 'bi' ? 'Properties: built-in model (your choice)' : cur.fl && MD.isBlend(cur.fl.id) ? 'Properties: built-in model (Auto uses it for blends)' : 'Properties: built-in model for this fluid'); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
+    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (st.fluidErr ? 'Properties: built-in model for this fluid (CoolProp: ' + st.fluidErr + ')' : S.engPref === 'bi' ? 'Properties: built-in model (your choice)' : st.waiting && cur.fl && st.waiting === cur.fl.id ? 'Properties: built-in model for now, CoolProp is still preparing ' + cur.fl.id + '\u2026' : 'Properties: built-in model for this fluid'); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
     else if (st.status === 'loading') { t = 'Properties: built-in model, loading CoolProp\u2026'; c = 'warn'; }
     else if (st.status === 'failed') { t = 'Properties: built-in model (CoolProp failed its self-check)'; c = 'bad'; }
     else { t = 'Properties: built-in model (CoolProp not loaded)'; c = 'warn'; }
@@ -2177,6 +2261,7 @@ let MD = (function () {
     MD.onPrep = () => updatePrep();
     MD.prefRef = S.ref;
     MD.pref = S.engPref;
+    MD.firstFn = () => S.fluid;
     MD.wantFn = () => S.ly;
     $('btnDiag').addEventListener('click', () => {
       const pre = $('cpDiag'); pre.hidden = false; pre.textContent = 'Testing\u2026';
