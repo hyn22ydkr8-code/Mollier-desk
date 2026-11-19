@@ -946,7 +946,7 @@ const CPE = (function (BI) {
   /* Builds every fluid in small slices so the page stays responsive. cb({done,total,id,ms,fromCache,failed,finished}) */
   function prepare(ids, ref, cb, opt) {
     opt = opt || {};
-    const slice = opt.slice || 8, gap = opt.gap || 30;
+    const slice = opt.slice || 14, gap = opt.gap || 12;
     const total = ids.length, t0 = Date.now();
     let done = 0, nCached = 0, built = 0, failed = [], stop = false;
     const note = (id, extra) => { try { cb && cb(Object.assign({ done, total, id, ms: Date.now() - t0, failed: failed.slice(), cached: nCached, built }, extra || {})); } catch (e) { /* ignore */ } };
@@ -987,6 +987,43 @@ const CPE = (function (BI) {
     return { cancel: () => { stop = true; } };
   }
   const ready = id => !!cache[id];
+
+  /* ---------- CoolProp chart lines for the report: built once per fluid, kept in memory and on the device ---------- */
+  const RL = {}, RJ = {};
+  const rlKey = fl => 'lines|' + CACHE_V + '|' + fl.id + '|' + fl.refMode;
+  function reportLines(fl, layers, progress, fast) {
+    const key = rlKey(fl);
+    const have = () => RL[key] && layers.every(l => RL[key].layers.indexOf(l) >= 0);
+    if (have()) return Promise.resolve(RL[key].L);
+    if (RJ[key]) {   /* already being built: speed it up and wait for it */
+      const j = RJ[key]; if (fast) j.opts.fast = true; if (progress) j.opts.progress = progress;
+      return j.p.then(() => reportLines(fl, layers, progress, fast));
+    }
+    const job = { opts: { manual: true, fast: !!fast, progress } };
+    job.p = (async () => {
+      if (!RL[key]) {
+        idb = idb || await idbOpen();
+        const d = await idbGet(key);
+        if (d && d.L && d.layers) RL[key] = d;
+      }
+      if (have()) return;
+      const missing = layers.filter(l => !RL[key] || RL[key].layers.indexOf(l) < 0);
+      const keep = fl.lines, kick = fl.kick, tok = fl.buildToken;
+      const o = buildLines(fl, null, null, job.opts);
+      fl.lines = keep; fl.kick = kick; fl.buildToken = tok;
+      const ok = await o.run(missing);
+      if (!ok) return;
+      const E = RL[key] || { L: { iso: [], ent: [], vol: [], qual: o.L.qual }, layers: [] };
+      missing.forEach(l => { E.L[l] = o.L[l]; E.layers.push(l); });
+      E.L.qual = o.L.qual;
+      RL[key] = E;
+      idbPut(key, E);
+    })().finally(() => { delete RJ[key]; });
+    RJ[key] = job;
+    return job.p.then(() => { if (!have()) throw new Error('report lines were not finished'); return RL[key].L; });
+  }
+  function cancelBackgroundLines(exceptKey) { Object.keys(RJ).forEach(k => { if (k !== exceptKey && !RJ[k].opts.fast) RJ[k].opts.cancelled = true; }); }
+  const reportLinesReady = (fl, layers) => !!(RL[rlKey(fl)] && layers.every(l => RL[rlKey(fl)].layers.indexOf(l) >= 0));
 
   /* ---------- states ---------- */
   function stateTP(fl, T, P, phase) {
@@ -1061,7 +1098,7 @@ const CPE = (function (BI) {
       const P = Math.exp(a + (b - a) * i / n);
       let hi;
       if (i === 0) hi = cyc.st1.h; else if (i === n) hi = cyc.st2s.h;
-      else { try { hi = stateAt(fl, P, 's', cyc.st1.s).h; } catch (e) { continue; } }
+      else { try { hi = q('H', 'P', P * 1000, 'S', (cyc.st1.s - fl.sOff) * 1000, fl.cpName) / 1000 + fl.hOff; } catch (e) { continue; } }   /* one call per point; compression stays in the vapour */
       out.push([cyc.st1.h + (hi - cyc.st1.h) / eta, P]);
     }
     return out;
@@ -1081,7 +1118,13 @@ const CPE = (function (BI) {
     const grid = [], sats = [];
     const Q = { prep: [], iso: [], ent: [], vol: [] };
     const borrow = opts && opts.borrow;
-    const H = (T, P) => q('H', 'T', T, 'P', P * 1000, f) / 1000 + fl.hOff;
+    /* CoolProp's mixture flash sometimes lands on the wrong phase (seen on R407C at -20 C, high pressure).
+       Points far from the built-in model's value are dropped, and the line is broken there. */
+    let bf = null; try { bf = BI.get(fl.id, fl.refMode); } catch (e) { bf = null; }
+    const sane = (h, ref) => { if (!isFinite(h)) return false; if (ref === null || !isFinite(ref)) return true; return Math.abs(h - ref) < 45; };
+    const biPT = (P, T) => { try { return bf ? BI.stateAtPT(bf, P, T).h : null; } catch (e) { return null; } };
+    const biPS = (P, s) => { try { return bf ? BI.stateAtPS(bf, P, s, true).h : null; } catch (e) { return null; } };
+    const H = (T, P) => { const h = q('H', 'T', T, 'P', P * 1000, f) / 1000 + fl.hOff; if (!sane(h, biPT(P, T))) throw new Error('odd point'); return h; };
     Q.prep.push(function* () { for (let i = 0; i < N; i++) { yield; const P = V.Pmin * Math.pow(V.Pmax / V.Pmin, i / (N - 1)); grid.push(P); let s = null; try { s = satFromTable(fl, P); if (s === undefined) s = sat(fl, P); } catch (e) { s = null; } sats.push(s); } });
     const Tlo = Math.ceil((fl.tmin - 273.15) / 10) * 10, Thi = Math.floor((fl.Tc - 273.15 + 70) / 10) * 10;
     for (let tc = Tlo; tc <= Thi; tc += 10) {
@@ -1113,7 +1156,12 @@ const CPE = (function (BI) {
           yield;
           const sa = sats[i];
           if (sa && sv < sa.sf) { if (cur.length) { segs.push(cur); cur = []; } continue; }
-          try { cur.push([sa && sv <= sa.sg ? sa.hf + (sv - sa.sf) / (sa.sg - sa.sf) * (sa.hg - sa.hf) : q('H', 'P', grid[i] * 1000, 'S', (sv - fl.sOff) * 1000, f) / 1000 + fl.hOff, grid[i]]); } catch (e) { if (cur.length) { segs.push(cur); cur = []; } }
+          try {
+            let h;
+            if (sa && sv <= sa.sg) h = sa.hf + (sv - sa.sf) / (sa.sg - sa.sf) * (sa.hg - sa.hf);
+            else { h = q('H', 'P', grid[i] * 1000, 'S', (sv - fl.sOff) * 1000, f) / 1000 + fl.hOff; if (!sane(h, biPS(grid[i], sv))) throw new Error('odd point'); }
+            cur.push([h, grid[i]]);
+          } catch (e) { if (cur.length) { segs.push(cur); cur = []; } }
         }
         if (cur.length) segs.push(cur);
         if (segs.length) L.ent.push({ val: sv, segs, step: sStep });
@@ -1150,14 +1198,15 @@ const CPE = (function (BI) {
         const jobs = Q.prep.slice(); layers.forEach(l => Q[l].forEach(j => jobs.push(j)));
         const total = jobs.length; let n = 0, g = null;
         const loop = () => {
+          if (opts.cancelled) { res(false); return; }
           if (busy()) { setTimeout(loop, 120); return; }
-          const t0 = Date.now();
-          while (Date.now() - t0 < 30) {
-            if (!g) { const j = jobs.shift(); if (!j) { res(); return; } try { g = j(); } catch (e) { g = null; n++; continue; } }
+          const t0 = Date.now(), sl = opts.fast ? 30 : 10;
+          while (Date.now() - t0 < sl) {
+            if (!g) { const j = jobs.shift(); if (!j) { res(true); return; } try { g = j(); } catch (e) { g = null; n++; continue; } }
             try { if (g.next().done) { g = null; n++; } } catch (e) { g = null; n++; }
           }
           if (opts.progress) opts.progress(n / total);
-          setTimeout(loop, 6);
+          setTimeout(loop, opts.fast ? 6 : 50);
         };
         loop();
       });
@@ -1194,7 +1243,7 @@ const CPE = (function (BI) {
     return L;
   }
 
-  return { setAPI, setErrFn, supports, isBlend, satPdew: (fl, T) => q('P', 'T', T, 'Q', 1, fl.cpName) / 1000, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat, prepare, ready, ids: () => Object.keys(NAMES).concat(Object.keys(MIXES)) };
+  return { setAPI, setErrFn, supports, isBlend, satPdew: (fl, T) => q('P', 'T', T, 'Q', 1, fl.cpName) / 1000, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat, prepare, ready, satTP: (fl, P) => (P < (fl.Pcalc || fl.Pc) * 0.9999 ? { Tb: q('T', 'P', P * 1000, 'Q', 0, fl.cpName), Td: q('T', 'P', P * 1000, 'Q', 1, fl.cpName) } : null), reportLines, reportLinesReady, cancelBackgroundLines, rlKey, ids: () => Object.keys(NAMES).concat(Object.keys(MIXES)) };
 })(BI);
 
 
@@ -1227,10 +1276,16 @@ let MD = (function () {
   /* Every line worked out by CoolProp itself (used for the PDF report). Resolves when done. */
   F.fullLines = (fl, layers, progress) => {
     if (!isCP(fl)) return Promise.resolve();
-    const o = CPE.buildLines(fl, null, null, { manual: true, progress });
-    fl.lines = o.L;
-    return o.run(layers);
+    return CPE.reportLines(fl, layers, progress, true).then(L => { fl.lines = L; });
   };
+  /* Quietly work out the report lines for the fluid on screen, so the report is ready when asked for. */
+  F.warmReport = (fl, layers) => {
+    if (!isCP(fl) || F.prep.state !== 'done') return;
+    CPE.cancelBackgroundLines(CPE.rlKey(fl));
+    if (CPE.reportLinesReady(fl, layers)) return;
+    CPE.reportLines(fl, layers, null, false).then(() => { if (F.onPrep) F.onPrep(); }, () => {});
+  };
+  F.reportReady = (fl, layers) => isCP(fl) && CPE.reportLinesReady(fl, layers);
   F.supportsCP = id => CPE.supports(id);
   F.cycleFromPoints = (fl, p) => isCP(fl) ? CPE.cycleFromPoints(fl, p) : BI.cycleFromPoints(fl, p);
   F.compressionPath = (fl, c, eta, n) => isCP(fl) ? CPE.compressionPath(fl, c, eta, n) : BI.compressionPath(fl, c, eta, n);
@@ -1238,7 +1293,7 @@ let MD = (function () {
   F.stateAtPS = (fl, P, s, x) => isCP(fl) ? CPE.stateAtPS(fl, P, s) : BI.stateAtPS(fl, P, s, x);
   F.satT = function (fl, P) {
     try {
-      if (isCP(fl)) { const s = CPE.sat(fl, P); return s ? { Tb: s.Tb, Td: s.Td } : null; }
+      if (isCP(fl)) return CPE.satTP(fl, P);
       if (!(P < fl.Pc * 0.999) || !(P > 5)) return null;
       const T = BI.satAtP(fl, P, false).T, g = fl.glide || 0;
       return { Tb: T - g / 2, Td: T + g / 2 };
@@ -1304,6 +1359,7 @@ let MD = (function () {
     CPE.prepare(ids, ref || 'IIR', e => {
       F.prep = { state: e.finished ? 'done' : 'running', done: e.done, total: e.total, ms: e.ms, cached: e.cached, built: e.built, failed: e.failed, id: e.id };
       if (F.onPrep) F.onPrep();
+      if (e.finished && F.onPrepDone) F.onPrepDone();
       if (st.waiting && (CPE.ready(st.waiting) || e.finished || e.failed.includes(st.waiting))) { st.waiting = null; if (F.onEngine) F.onEngine(); }
     });
   };
@@ -1476,10 +1532,14 @@ let MD = (function () {
     }
     S.touched = false;
   }
+  let warmT = 0;
+  const repLayers = () => ['iso', 'ent', 'vol'].filter(k => S.ly[k]);
+  function warmSoon() { clearTimeout(warmT); warmT = setTimeout(() => { try { MD.warmReport(cur.fl, repLayers()); } catch (e) { /* ignore */ } }, 1500); }
   function selectFluid(id) {
     S.fluid = id;
     cur.fl = MD.get(id, S.ref);
     if (!cur.fl.lines) MD.buildLines(cur.fl);
+    warmSoon();
     const f = cur.fl;
     updateBadge();
     $('fluidMeta').textContent = f.note + ' \u00B7 critical ' + C2(f.Tc).toFixed(1) + ' \u00B0C, ' + barA(f.Pc) + ' bar a';
@@ -1527,7 +1587,15 @@ let MD = (function () {
       later(d ? d.name : v, () => { cur.probe = null; cur.sticky = false; S.touched = false; selectFluid(v); syncInputs(); recompute(true); });
     });
     Object.keys(NUM).forEach(id => {
-      $(id).addEventListener('input', () => { S[NUM[id]] = parseFloat($(id).value); S.touched = true; $('exNote').hidden = true; $('btnExample').hidden = false; recompute(false); });
+      /* calculate when the entry is finished (Done, Enter, or moving to another box), not on every keystroke */
+      const commit = () => { const v = parseFloat($(id).value); if (v === S[NUM[id]] || (isNaN(v) && isNaN(S[NUM[id]]))) return; S[NUM[id]] = v; S.touched = true; $('exNote').hidden = true; $('btnExample').hidden = false; recompute(false); };
+      $(id).addEventListener('change', commit);
+      if (id === 'inpPs' || id === 'inpPd') {   /* the saturation hint follows the typing after a short pause */
+        let hT = 0;
+        $(id).addEventListener('input', () => { clearTimeout(hT); hT = setTimeout(() => updateSat(id), cur.fl && cur.fl.viaCP && MD.isBlend(cur.fl.id) ? 600 : 350); });
+      }
+      $(id).addEventListener('blur', commit);
+      $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { commit(); $(id).blur(); } });
     });
     $('puSel').addEventListener('change', () => {
       const o = PU[S.pu], n = PU[$('puSel').value];
@@ -1538,7 +1606,7 @@ let MD = (function () {
     $('btnExample').addEventListener('click', () => { fillExample(); syncInputs(); recompute(true); });
     $('refSel').addEventListener('change', () => { const v = $('refSel').value; later('reference state', () => { S.ref = v; selectFluid(S.fluid); recompute(true); }); });
     [['lyIso', 'iso'], ['lyEnt', 'ent'], ['lyVol', 'vol'], ['lyQual', 'qual']].forEach(([id, k]) => {
-      $(id).addEventListener('change', () => { S.ly[k] = $(id).checked; draw(); save(); MD.kick(cur.fl); });
+      $(id).addEventListener('change', () => { S.ly[k] = $(id).checked; draw(); save(); MD.kick(cur.fl); warmSoon(); });
     });
     $('btnFit').addEventListener('click', () => { fitView(); draw(); });
     $('btnFull').addEventListener('click', () => { resetView(); draw(); });
@@ -1561,17 +1629,23 @@ let MD = (function () {
       { k: '4', name: 'After expansion', st: c.st4, P: c.Pe, meas: false }
     ] : null;
   }
-  function updateSat() {
-    [['Ps', 'satPs'], ['Pd', 'satPd']].forEach(([k, id]) => {
+  function updateSat(only) {
+    [['Ps', 'satPs', 'inpPs'], ['Pd', 'satPd', 'inpPd']].forEach(([k, id, inp]) => {
+      if (only && only !== inp) return;
       const el = $(id); let t = '';
-      if (isFinite(S[k]) && cur.fl) {
-        const s = MD.satT(cur.fl, PU[S.pu].t(S[k]));
+      const val = only ? parseFloat($(inp).value) : S[k];   /* while typing, use what is in the box so far */
+      if (isFinite(val) && cur.fl) {
+        const s = MD.satT(cur.fl, PU[S.pu].t(val));
         if (s) t = s.Td - s.Tb > 1 ? 'Dew ' + num(C2(s.Td), 1) + ' \u00B7 Bub ' + num(C2(s.Tb), 1) + ' \u00B0C' : 'Sat. ' + num(C2((s.Td + s.Tb) / 2), 1) + ' \u00B0C';
       }
       el.textContent = t;
     });
   }
+  /* while typing, wait for a short pause before recalculating so the box never freezes */
+  let typeT = 0;
+  function typed() { clearTimeout(typeT); typeT = setTimeout(() => recompute(false), cur.fl && cur.fl.viaCP && MD.isBlend(cur.fl.id) ? 450 : 200); }
   function recompute(refit) {
+    clearTimeout(typeT);
     updateSat();
     const bad = ['Ps', 'Ts', 'Pd', 'Td', 'T3'].find(k => !isFinite(S[k]));
     if (bad) { showMsg('Enter all five readings to calculate.'); cur.cyc = null; }
@@ -1580,7 +1654,7 @@ let MD = (function () {
       if (!c.ok) { showMsg(c.err); cur.cyc = null; }
       else {
         showMsg(''); cur.cyc = c;
-        cur.comp = MD.compressionPath(cur.fl, c, Math.min(1, Math.max(0.05, c.eta)), 40);
+        cur.comp = MD.compressionPath(cur.fl, c, Math.min(1, Math.max(0.05, c.eta)), cur.fl.viaCP ? 14 : 40);
       }
     }
     buildPts();
@@ -2217,7 +2291,7 @@ let MD = (function () {
             await MD.fullLines(fl2, layers, f => pdfMsg('Working out chart lines with CoolProp: ' + Math.round(f * 100) + ' %'));
             cur.fl = fl2;
             const c = MD.cycleFromPoints(fl2, { Ps: PU[S.pu].t(S.Ps), Pd: PU[S.pu].t(S.Pd), Ts: S.Ts + 273.15, Td: S.Td + 273.15, T3: S.T3 + 273.15 });
-            if (c.ok) { cur.cyc = c; cur.comp = MD.compressionPath(fl2, c, Math.min(1, Math.max(0.05, c.eta)), 40); buildPts(); }
+            if (c.ok) { cur.cyc = c; cur.comp = MD.compressionPath(fl2, c, Math.min(1, Math.max(0.05, c.eta)), 14); buildPts(); }
             else cur.fl = keep.fl;
           }
         } catch (e) { cur.fl = keep.fl; cur.cyc = keep.cyc; cur.comp = keep.comp; cur.pts = keep.pts; }
@@ -2291,7 +2365,8 @@ let MD = (function () {
     if (p.state === 'running') el.textContent = 'Preparing all refrigerants in the background: ' + p.done + ' of ' + p.total + ' (' + sec + ')';
     else {
       const bad = p.failed.length ? ' \u2014 could not prepare ' + p.failed.join(', ') + ' (these use the built-in model)' : '';
-      el.textContent = 'All ' + (p.total - p.failed.length) + ' refrigerants ready in ' + sec + (p.built === 0 ? ' (loaded from this device)' : p.cached ? ' (' + p.cached + ' loaded from this device)' : ' (saved on this device, so next time is quicker)') + bad;
+      const rr = cur.fl && cur.fl.viaCP ? (MD.reportReady(cur.fl, repLayers()) ? '. Report chart for ' + cur.fl.id + ' ready.' : '. Working out the report chart for ' + cur.fl.id + '\u2026') : '';
+      el.textContent = 'All ' + (p.total - p.failed.length) + ' refrigerants ready in ' + sec + (p.built === 0 ? ' (loaded from this device)' : p.cached ? ' (' + p.cached + ' loaded from this device)' : ' (saved on this device, so next time is quicker)') + bad + rr;
     }
   }
 
@@ -2300,6 +2375,7 @@ let MD = (function () {
     MD.onEngine = () => { cur.probe = null; cur.sticky = false; selectFluid(S.fluid); syncInputs(); recompute(true); updateBadge(); };
     MD.onLines = () => draw();
     MD.onPrep = () => updatePrep();
+    MD.onPrepDone = () => warmSoon();
     MD.prefRef = S.ref;
     MD.pref = S.engPref;
     MD.firstFn = () => S.fluid;
