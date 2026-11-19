@@ -1,5 +1,5 @@
 /* Mollier Desk offline cache. Bump VERSION when index.html changes; CoolProp has its own cache (CP_CACHE below). */
-const VERSION = 'mollier-v15';
+const VERSION = 'mollier-v17';
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 const HEAVY = ['coolprop.js', 'coolprop.wasm'];
 /* CoolProp (about 9 MB) lives in its own cache, so a page update does not download it again.

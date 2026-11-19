@@ -1825,10 +1825,20 @@ let MD = (function () {
           if (!c0.ok) throw new Error('example');
           S.Ps = pr(u.f(Pe)); S.Pd = pr(u.f(Pk)); S.Ts = 6; S.T3 = d.Tgc || 35; S.Td = Math.round(C2(c0.st2.T));
         } else {
-          const Pk = MD.satPdew(fl, 313.15), sk = MD.satT(fl, Pk);
+          /* condensing reference is the bubble point (where subcooling is measured): 40 C bubble, 35 C liquid line */
+          const bf = BI.get(fl.id, S.ref);
+          let lo = Math.log(BI.satP(bf, 300).P), hi = Math.log(BI.satP(bf, Math.min(330, fl.Tc - 2)).P);
+          for (let i = 0; i < 50; i++) { const m = (lo + hi) / 2, sb = BI.satAtP(bf, Math.exp(m), true), tb = sb.Tb !== undefined ? sb.Tb : sb.T - (bf.glide || 0) / 2; if (tb < 313.15) lo = m; else hi = m; }
+          const Pk = Math.exp((lo + hi) / 2);
+          /* about 65 C discharge, unless that would be impossible or implausible for this fluid: then use 70 % isentropic efficiency */
           let Td = 65;
-          if (c0.ok) { const real = C2(c0.st2.T); if (Math.abs(real - 65) > 15) Td = Math.round(real); }
-          S.Ps = pr(u.f(Pe)); S.Pd = pr(u.f(Pk)); S.Ts = 6; S.T3 = rnd1(C2(sk ? sk.Tb : 313.15) - 5); S.Td = Td;
+          const rd = { Ps: Pe, Pd: Pk, Ts: 279.15, T3: 308.15 };
+          const c65 = MD.cycleFromPoints(fl, Object.assign({ Td: 338.15 }, rd));
+          if (!c65.ok || c65.eta > 0.85 || c65.eta < 0.45) {
+            const c70 = MD.cycleFromPoints(fl, Object.assign({ Td: 393.15 }, rd));   /* a hot discharge always gives a valid cycle, for suction state and ideal compression */
+            if (c70.st2s) { const h2 = c70.st1.h + (c70.st2s.h - c70.st1.h) / 0.7, st = MD.stateAtPH(fl, Pk, h2, true); if (st && isFinite(st.T)) Td = Math.round(C2(st.T)); }
+          }
+          S.Ps = pr(u.f(Pe)); S.Pd = pr(u.f(Pk)); S.Ts = 6; S.T3 = 35; S.Td = Td;
         }
         done = true;
       }
@@ -1900,11 +1910,11 @@ let MD = (function () {
       /* calculate when the entry is finished (Done, Enter, or moving to another box), not on every keystroke */
       const commit = () => {
         if ($(id).validity && $(id).validity.badInput) { showMsg('That number could not be read. Use a point for decimals, for example 1.5.'); return; }
-        const v = parseFloat($(id).value); if (v === S[NUM[id]] || (isNaN(v) && isNaN(S[NUM[id]]))) return; S[NUM[id]] = v; S.touched = true; $('exNote').hidden = true; $('btnExample').hidden = false; recompute(false); };
+        const v = parseFloat($(id).value); if (v === S[NUM[id]] || (isNaN(v) && isNaN(S[NUM[id]]))) return; S[NUM[id]] = v; S.touched = true; $('exNote').hidden = true; $('btnExample').hidden = false; recompute(false, true); };
       $(id).addEventListener('change', commit);
       if (id === 'inpPs' || id === 'inpPd') {   /* the saturation hint follows the typing after a short pause */
         let hT = 0;
-        $(id).addEventListener('input', () => { clearTimeout(hT); hT = setTimeout(() => updateSat(id), cur.fl && cur.fl.viaCP && MD.isBlend(cur.fl.id) ? 600 : 350); });
+        $(id).addEventListener('input', () => { clearTimeout(hT); hT = setTimeout(() => updateSat(id, cur.fl && cur.fl.viaCP ? BI.get(cur.fl.id, S.ref) : cur.fl), 350); });
       }
       $(id).addEventListener('blur', commit);
       $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { commit(); $(id).blur(); } });
@@ -1940,13 +1950,17 @@ let MD = (function () {
       { k: '4', name: 'After expansion', st: c.st4, P: c.Pe, meas: false }
     ] : null;
   }
-  function updateSat(only) {
+  function satTB(f, P) {   /* saturation temperatures from the built-in tables */
+    try { if (!(P < f.Pc * 0.999)) return null; const s = BI.satAtP(f, P, true); return s.Tb !== undefined ? { Tb: s.Tb, Td: s.Td } : { Tb: s.T - (f.glide || 0) / 2, Td: s.T + (f.glide || 0) / 2 }; } catch (e) { return null; }
+  }
+  function updateSat(only, flUse) {
+    const fs = flUse || cur.fl;
     [['Ps', 'satPs', 'inpPs'], ['Pd', 'satPd', 'inpPd']].forEach(([k, id, inp]) => {
       if (only && only !== inp) return;
       const el = $(id); let t = '';
       const val = only ? parseFloat($(inp).value) : S[k];   /* NaN when empty */   /* while typing, use what is in the box so far */
-      if (Number.isFinite(val) && cur.fl) {
-        const s = MD.satT(cur.fl, PU[S.pu].t(val));
+      if (Number.isFinite(val) && fs) {
+        const s = fs.viaCP ? MD.satT(fs, PU[S.pu].t(val)) : satTB(fs, PU[S.pu].t(val));
         if (s) t = s.Td - s.Tb >= 1 ? 'Dew ' + num(C2(s.Td), 1) + ' \u00B7 Bub ' + num(C2(s.Tb), 1) + ' \u00B0C' : 'Sat. ' + num(C2(s.Td), 1) + ' \u00B0C';
       }
       el.textContent = t;
@@ -1955,17 +1969,33 @@ let MD = (function () {
   /* Isentropic efficiency over 100 % is physically impossible: the discharge reading is too low (probe too far from the compressor, or heat lost). */
   const ETA_WARN = 'Isentropic efficiency is over 100 %, which cannot happen. The discharge temperature reading is probably too low (probe too far from the compressor, or heat lost from the shell), so COP is overstated.';
   function flagEta(c) { c.etaBad = c.eta > 1.0005; }
-  function recompute(refit) {
-    updateSat();
+  /* Live CoolProp can take a moment (blends especially), which made moving to the next box feel sticky.
+     So when an entry is finished, show the answer from the built-in CoolProp tables at once (within about
+     0.02 K and 1 %), then redo it with live CoolProp once typing has paused. */
+  let refineT = 0, lastKey = 0;
+  ['keydown', 'input'].forEach(ev => document.addEventListener(ev, () => { lastKey = Date.now(); }, true));
+  function scheduleRefine() {
+    clearTimeout(refineT);
+    refineT = setTimeout(function go() {
+      if (Date.now() - lastKey < 1200) { refineT = setTimeout(go, 400); return; }
+      if (cur.cyc && cur.cyc.prelim) recompute(false);
+    }, 600);
+  }
+  function recompute(refit, quick) {
+    const tablesFirst = quick && cur.fl && cur.fl.viaCP;
+    const fq = tablesFirst ? BI.get(cur.fl.id, S.ref) : cur.fl;
+    if (!tablesFirst) clearTimeout(refineT);
+    updateSat(undefined, fq);
     const bad = ['Ps', 'Ts', 'Pd', 'Td', 'T3'].find(k => !Number.isFinite(S[k]));
     if (bad) { showMsg('Enter all five readings to calculate.'); cur.cyc = null; }
     else {
-      const c = MD.cycleFromPoints(cur.fl, { Ps: PU[S.pu].t(S.Ps), Pd: PU[S.pu].t(S.Pd), Ts: S.Ts + 273.15, Td: S.Td + 273.15, T3: S.T3 + 273.15 });
+      const c = (tablesFirst ? BI : MD).cycleFromPoints(fq, { Ps: PU[S.pu].t(S.Ps), Pd: PU[S.pu].t(S.Pd), Ts: S.Ts + 273.15, Td: S.Td + 273.15, T3: S.T3 + 273.15 });
       if (!c.ok) { showMsg(c.err); cur.cyc = null; }
       else {
         showMsg(''); cur.cyc = c;
         flagEta(c);
-        cur.comp = MD.compressionPath(cur.fl, c, Math.max(0.05, c.eta), cur.fl.viaCP ? 14 : 40);
+        if (tablesFirst) { c.prelim = true; cur.comp = BI.compressionPath(fq, c, Math.max(0.05, c.eta), 40); scheduleRefine(); }
+        else cur.comp = MD.compressionPath(cur.fl, c, Math.max(0.05, c.eta), cur.fl.viaCP ? 14 : 40);
       }
     }
     buildPts();
@@ -2095,10 +2125,11 @@ let MD = (function () {
   function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p; }
   function clampView(v) {
     const b = base, sh = b.h1 - b.h0, sl = b.lp1 - b.lp0;
-    const ws = Math.min(Math.max(v.h1 - v.h0, sh * 0.03), sh * 1.25), ls = Math.min(Math.max(v.lp1 - v.lp0, sl * 0.03), sl * 1.25);
+    /* never wider than the full chart, and always kept inside it, so there is no empty space round the edges */
+    const ws = Math.min(Math.max(v.h1 - v.h0, sh * 0.03), sh), ls = Math.min(Math.max(v.lp1 - v.lp0, sl * 0.03), sl);
     let ch = (v.h0 + v.h1) / 2, cl = (v.lp0 + v.lp1) / 2;
-    ch = Math.min(Math.max(ch, b.h0 - sh * 0.1), b.h1 + sh * 0.1);
-    cl = Math.min(Math.max(cl, b.lp0 - sl * 0.1), b.lp1 + sl * 0.1);
+    ch = Math.min(Math.max(ch, b.h0 + ws / 2), b.h1 - ws / 2);
+    cl = Math.min(Math.max(cl, b.lp0 + ls / 2), b.lp1 - ls / 2);
     return { h0: ch - ws / 2, h1: ch + ws / 2, lp0: cl - ls / 2, lp1: cl + ls / 2 };
   }
 
@@ -2639,7 +2670,7 @@ let MD = (function () {
     try {
       await tick();
       /* The report always uses CoolProp when it is running. The results on screen already do, unless Built-in is chosen. */
-      if (MD.state.cp && MD.supportsCP(snap.fl.id) && !snap.fl.viaCP) {
+      if (MD.state.cp && MD.supportsCP(snap.fl.id) && (!snap.fl.viaCP || snap.cyc.prelim)) {
         const pref = MD.pref; let fl2 = null;
         MD.pref = 'auto';
         try { fl2 = MD.get(snap.S.fluid, snap.S.ref); } catch (e) { fl2 = null; } finally { MD.pref = pref; }
