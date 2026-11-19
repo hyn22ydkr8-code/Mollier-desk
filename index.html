@@ -169,7 +169,8 @@ details p { margin: 8px 0 0; max-width: 78ch; }
         <p class="meta" id="fluidMeta"></p>
         <p class="warnnote" id="fluidWarn" hidden></p>
         <p class="eng warn" id="engBadge" hidden></p>
-        <div id="engRow" hidden style="margin-top:8px"><label class="f" for="engSel"><span class="fl">Calculation engine</span><select id="engSel"><option value="cp">CoolProp for every refrigerant (accurate mixture properties)</option><option value="auto">Automatic engine selection</option><option value="bi">Built-in model for everything</option></select></label></div>
+        <p class="eng" id="prepLine" hidden style="margin-top:6px"></p>
+        <div id="engRow" hidden style="margin-top:8px"><label class="f" for="engSel"><span class="fl">Calculation engine</span><select id="engSel"><option value="auto">Auto: CoolProp for single fluids, built-in for blends</option><option value="cp">CoolProp for everything (blends can be slow)</option><option value="bi">Built-in model for everything</option></select></label></div>
         <button type="button" class="btn" id="btnDiag" hidden style="margin-top:8px">Test CoolProp on blends</button>
         <pre id="cpDiag" hidden style="margin:8px 0 0;font:11px/1.45 var(--f-mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)"></pre>
       </div>
@@ -743,11 +744,7 @@ const BI = (function () {
 const CPE = (function (BI) {
   'use strict';
   let API = null;
-  // CoolProp is expensive. Keep a bounded LRU of exact PropsSI calls so chart
-  // construction, readings and repeated redraws can reuse the same results.
-  const propCache = new Map();
-  const PROP_CACHE_LIMIT = 30000;
-  function setAPI(f, ef) { API = f; propCache.clear(); if (ef !== undefined) errFn = ef; }
+  function setAPI(f, ef) { API = f; if (ef !== undefined) errFn = ef; }
   const NAMES = {
     R134a: 'R134a', R1234yf: 'R1234yf', R1234ze: 'R1234ze(E)', R32: 'R32', R125: 'R125', R143a: 'R143a', R152a: 'R152A', R23: 'R23',
     R245fa: 'R245fa', R1233zd: 'R1233zd(E)', R22: 'R22', R600: 'n-Butane', R600a: 'IsoButane', R290: 'Propane', R1270: 'Propylene',
@@ -766,11 +763,6 @@ const CPE = (function (BI) {
   function setErrFn(f) { errFn = f; }
   const short = f => String(f).replace(/HEOS::/, '').replace(/\[(\d\.\d{2})\d*\]/g, '[$1]').slice(0, 40);
   const q = (out, k1, v1, k2, v2, f) => {
-    const key = [out, k1, v1, k2, v2, f].join('|');
-    if (propCache.has(key)) {
-      const hit = propCache.get(key); propCache.delete(key); propCache.set(key, hit);
-      return hit;
-    }
     const r = API(out, k1, v1, k2, v2, f);
     if (typeof r !== 'number' || !isFinite(r) || Math.abs(r) > 1e300) {
       let why = '';
@@ -778,8 +770,6 @@ const CPE = (function (BI) {
       const num = x => typeof x === 'number' ? +x.toPrecision(6) : x;
       throw new Error(out + (k1 ? ' from ' + k1 + '=' + num(v1) + ', ' + k2 + '=' + num(v2) : '') + ' for ' + short(f) + (why ? ': ' + why : ''));
     }
-    propCache.set(key, r);
-    if (propCache.size > PROP_CACHE_LIMIT) propCache.delete(propCache.keys().next().value);
     return r;
   };
   function mixString(id) {
@@ -792,7 +782,8 @@ const CPE = (function (BI) {
   const supports = id => !!(NAMES[id] || MIXES[id]);
 
   /* ---------- fluid setup ---------- */
-  function setRef(fl, mode) {
+  function run(g) { let r; while (!(r = g.next()).done); return r.value; }
+  function* setRefGen(fl, mode) {
     const oldH = fl.hOff || 0, oldS = fl.sOff || 0, had = !!fl.tab;
     fl.hOff = 0; fl.sOff = 0;
     const Tr = mode === 'ASHRAE' ? 233.15 : 273.15;
@@ -804,8 +795,9 @@ const CPE = (function (BI) {
       const dh = fl.hOff - oldH, ds = fl.sOff - oldS, t = fl.tab;
       for (let i = 0; i < t.n; i++) { t.hf[i] += dh; t.hg[i] += dh; t.sf[i] += ds; t.sg[i] += ds; }
       fl.view.h0 += dh; fl.view.h1 += dh;
-    } else buildTable(fl);
+    } else yield* tableGen(fl);
   }
+  function setRef(fl, mode) { run(setRefGen(fl, mode)); }
   function sat(fl, P) {
     if (!(P < (fl.Pcalc || fl.Pc) * 0.9999)) return null;
     const Pa = P * 1000, f = fl.cpName, ho = fl.hOff, so = fl.sOff;
@@ -817,7 +809,7 @@ const CPE = (function (BI) {
     };
   }
   const f0 = fl => fl.cpName;
-  function buildTable(fl) {
+  function* tableGen(fl) {
     const f = fl.cpName, N = /^HEOS|\.mix$/.test(f0(fl)) ? 70 : 110;
     const Pmin = q('P', 'T', fl.tmin, 'Q', 0, f) / 1000, Ptop = fl.Pc * 0.9992;
     const T = [], P = [], hf = [], hg = [], sf = [], sg = [], vf = [], vg = [];
@@ -825,6 +817,7 @@ const CPE = (function (BI) {
     for (let i = 0; i < N; i++) {
       const u = 1 - Math.pow(1 - i / (N - 1), 2), p = Math.exp(Math.log(Pmin) + (Math.log(Ptop) - Math.log(Pmin)) * u);
       let s;
+      yield;
       try { s = sat(fl, p); } catch (e) { lastErr = e; continue; }   /* a few points can fail for blends near the critical point */
       if (!s || !(s.Td >= s.Tb - 1e-6) || !(s.hg > s.hf)) { lastErr = lastErr || new Error('odd saturation values at ' + p.toFixed(0) + ' kPa'); continue; }
       lastS = s;
@@ -866,7 +859,7 @@ const CPE = (function (BI) {
     const hV = q('H', 'T', fl.Tc + 60, 'P', Pl * 1000, f) / 1000 + fl.hOff;
     fl.view = { Pmin: Pl, Pmax, h0: Math.floor((Math.min(hL, hf[0]) - 12) / 10) * 10, h1: Math.ceil(hV / 10) * 10 };
   }
-  function build(id, ref) {
+  function* buildGen(id, ref) {
     const base = BI.DEFS.find(d => d.id === id);
     if (!base || !supports(id)) throw new Error('No CoolProp name for ' + id);
     const fl = Object.assign({}, base);
@@ -876,15 +869,100 @@ const CPE = (function (BI) {
     try { tmin = Math.max(tmin, q('Tmin', '', 0, '', 0, fl.cpName) + 1); } catch (e) { /* keep table value */ }
     fl.tmin = tmin;
     fl.note = base.note.replace(/^Blend.*$/, 'Blend, CoolProp mixture model, with real dew and bubble points');
-    setRef(fl, ref);
+    yield* setRefGen(fl, ref);
     return fl;
   }
+  const build = (id, ref) => run(buildGen(id, ref));
   function get(id, ref) {
     if (!cache[id]) cache[id] = build(id, ref);
     const fl = cache[id];
     if (fl.refMode !== ref) setRef(fl, ref);
     return fl;
   }
+
+  /* ---------- background preload with a saved copy ---------- */
+  const CACHE_V = 'v1';
+  let idb = null;
+  function idbOpen() {
+    return new Promise(res => {
+      try {
+        const r = indexedDB.open('mollier-cp', 1);
+        r.onupgradeneeded = () => { r.result.createObjectStore('fl'); };
+        r.onsuccess = () => res(r.result); r.onerror = () => res(null); r.onblocked = () => res(null);
+      } catch (e) { res(null); }
+    });
+  }
+  const idbGet = key => new Promise(res => {
+    if (!idb) return res(null);
+    try { const r = idb.transaction('fl').objectStore('fl').get(key); r.onsuccess = () => res(r.result || null); r.onerror = () => res(null); } catch (e) { res(null); }
+  });
+  const idbPut = (key, val) => new Promise(res => {
+    if (!idb) return res(false);
+    try { const t = idb.transaction('fl', 'readwrite'); t.objectStore('fl').put(val, key); t.oncomplete = () => res(true); t.onerror = () => res(false); t.onabort = () => res(false); } catch (e) { res(false); }
+  });
+  function snapshot(fl) {
+    const t = fl.tab;
+    return { v: CACHE_V, cpName: fl.cpName, Tc: fl.Tc, Pc: fl.Pc, tmin: fl.tmin, Pcalc: fl.Pcalc || null, truncated: !!fl.truncated,
+      hOff: fl.hOff, sOff: fl.sOff, refMode: fl.refMode, view: fl.view,
+      tab: { n: t.n, T: t.T, P: t.P, hf: t.hf, hg: t.hg, sf: t.sf, sg: t.sg, vf: t.vf, vg: t.vg } };
+  }
+  function restore(id, d) {
+    const base = BI.DEFS.find(x => x.id === id);
+    if (!base || !d || d.v !== CACHE_V || d.cpName !== (NAMES[id] || mixString(id)) || !d.tab || !(d.tab.n >= 40)) return null;
+    const t = d.tab, fl = Object.assign({}, base);
+    fl.viaCP = true; fl.cpName = d.cpName; fl.est = false; fl.engine = 'CoolProp';
+    fl.Tc = d.Tc; fl.Pc = d.Pc; fl.tmin = d.tmin; if (d.Pcalc) fl.Pcalc = d.Pcalc; if (d.truncated) fl.truncated = true;
+    fl.note = base.note.replace(/^Blend.*$/, 'Blend, CoolProp mixture model, with real dew and bubble points');
+    fl.hOff = d.hOff; fl.sOff = d.sOff; fl.refMode = d.refMode; fl.view = d.view;
+    fl.tab = { n: t.n, T: t.T, P: t.P, hf: t.hf, hg: t.hg, sf: t.sf, sg: t.sg, vf: t.vf, vg: t.vg, lnP: t.P.map(Math.log) };
+    /* guard against a different CoolProp build: one live flash must agree with the saved table */
+    const k = Math.floor(t.n / 2), Tb = q('T', 'P', t.P[k] * 1000, 'Q', 0, fl.cpName);
+    if (!(Math.abs(Tb - t.T[k]) < 0.05)) return null;
+    return fl;
+  }
+  /* Builds every fluid in small slices so the page stays responsive. cb({done,total,id,ms,fromCache,failed,finished}) */
+  function prepare(ids, ref, cb, opt) {
+    opt = opt || {};
+    const slice = opt.slice || 8, gap = opt.gap || 30;
+    const total = ids.length, t0 = Date.now();
+    let done = 0, nCached = 0, built = 0, failed = [], stop = false;
+    const note = (id, extra) => { try { cb && cb(Object.assign({ done, total, id, ms: Date.now() - t0, failed: failed.slice(), cached: nCached, built }, extra || {})); } catch (e) { /* ignore */ } };
+    const after = (fn, ms) => setTimeout(fn, ms);
+    (async () => {
+      idb = idb || await idbOpen();
+      for (const id of ids) {
+        if (stop) break;
+        note(id, { starting: true });
+        if (cache[id]) { if (cache[id].tab) idbPut(id, snapshot(cache[id])); done++; continue; }
+        let fl = null, cached = false;
+        try { const d = await idbGet(id); if (d) { fl = restore(id, d); cached = !!fl; } } catch (e) { fl = null; }
+        if (!fl) {
+          try {
+            const g = buildGen(id, ref);
+            await new Promise((resolve, reject) => {
+              const step = () => {
+                try {
+                  const end = Date.now() + slice;
+                  let r;
+                  do { r = g.next(); } while (!r.done && Date.now() < end);
+                  if (r.done) { fl = r.value; resolve(); } else after(step, gap);
+                } catch (e) { reject(e); }
+              };
+              after(step, 0);
+            });
+            if (fl && fl.tab) idbPut(id, snapshot(fl));
+          } catch (e) { failed.push(id); fl = null; }
+        }
+        if (fl && !cache[id]) { cache[id] = fl; if (cached) nCached++; else built++; }
+        done++;
+        note(id, {});
+        await new Promise(r => after(r, gap));
+      }
+      note('', { finished: true });
+    })();
+    return { cancel: () => { stop = true; } };
+  }
+  const ready = id => !!cache[id];
 
   /* ---------- states ---------- */
   function stateTP(fl, T, P, phase) {
@@ -1054,14 +1132,14 @@ const CPE = (function (BI) {
       for (let qu = next(); qu && Date.now() - t0 < 12; qu = next()) { const job = qu.shift(); try { job(); } catch (e) { /* skip this line */ } did = true; }
       const more = next();
       if (notify && did && (!more || Date.now() - lastNote > 400)) { lastNote = Date.now(); notify(); }
-      if (more) timer = setTimeout(step, 12);
+      if (more) timer = setTimeout(step, 40);
     };
     fl.kick = () => { if (!timer && fl.buildToken === token && next()) timer = setTimeout(step, 0); };
     timer = setTimeout(step, 0);
     return L;
   }
 
-  return { setAPI, setErrFn, supports, isBlend, satPdew: (fl, T) => q('P', 'T', T, 'Q', 1, fl.cpName) / 1000, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat };
+  return { setAPI, setErrFn, supports, isBlend, satPdew: (fl, T) => q('P', 'T', T, 'Q', 1, fl.cpName) / 1000, get, stateAtPH, stateAtPS, cycleFromPoints, compressionPath, buildLines, mixString, sat, prepare, ready, ids: () => Object.keys(NAMES).concat(Object.keys(MIXES)) };
 })(BI);
 
 
@@ -1070,8 +1148,8 @@ let MD = (function () {
   const st = { cp: false, status: 'loading', detail: '' };
   const F = { DEFS: BI.DEFS, state: st, onEngine: null, onLines: null };
   const isCP = fl => !!(fl && fl.viaCP);
-  F.pref = 'cp';   /* cp: CoolProp for every supported fluid; bi: built-in model */
-  const useCP = id => st.cp && CPE.supports(id) && F.pref !== 'bi';
+  F.pref = 'auto';   /* auto: CoolProp for single fluids, built-in for blends; cp: CoolProp wherever possible; bi: built-in */
+  const useCP = id => st.cp && CPE.supports(id) && (F.pref === 'cp' || (F.pref === 'auto' && !CPE.isBlend(id)));
   F.get = function (id, ref) {
     if (useCP(id)) { try { st.fluidErr = ''; return CPE.get(id, ref); } catch (e) { st.fluidErr = id + ': ' + (e && e.message ? e.message : String(e)); } }
     return BI.get(id, ref);
@@ -1142,9 +1220,22 @@ let MD = (function () {
     });
     return out.join('\n');
   };
+  /* Background preload of every fluid, so later switching is instant. */
+  F.prep = { state: 'idle', done: 0, total: 0, ms: 0, cached: 0, failed: [] };
+  F.onPrep = null;
+  F.preload = function (ref) {
+    if (!st.cp || window.__NO_PRELOAD || F.prep.state === 'running') return;
+    const ids = CPE.ids().filter(id => BI.DEFS.some(d => d.id === id));
+    ids.sort((x, y) => (CPE.isBlend(x) ? 1 : 0) - (CPE.isBlend(y) ? 1 : 0));
+    F.prep = { state: 'running', done: 0, total: ids.length, ms: 0, cached: 0, built: 0, failed: [], id: '' };
+    CPE.prepare(ids, ref || 'IIR', e => {
+      F.prep = { state: e.finished ? 'done' : 'running', done: e.done, total: e.total, ms: e.ms, cached: e.cached, built: e.built, failed: e.failed, id: e.id };
+      if (F.onPrep) F.onPrep();
+    });
+  };
   F.useCoolProp = function (api, errFn) {
     window.__cpRaw = api;
-    try { selfCheck(api); CPE.setErrFn(errFn || null); st.cp = true; st.status = 'coolprop'; st.detail = ''; }
+    try { selfCheck(api); CPE.setErrFn(errFn || null); st.cp = true; st.status = 'coolprop'; st.detail = ''; setTimeout(() => F.preload(F.prefRef), 400); }
     catch (e) { st.cp = false; st.status = 'failed'; st.detail = e && e.message ? e.message : String(e); }
     if (F.onEngine) F.onEngine();
     return st.cp;
@@ -1217,7 +1308,7 @@ let MD = (function () {
     kpag: { l: 'kPa g', d: 0, f: k => k - 101.325, t: v => v + 101.325 }
   };
   const KEYS = ['fluid', 'ref', 'pu', 'Ps', 'Ts', 'Pd', 'Td', 'T3', 'touched', 'ly', 'site', 'eng', 'notes', 'engPref'];
-  const S = { fluid: 'R134a', ref: 'IIR', pu: 'barg', Ps: 1, Ts: 0, Pd: 9, Td: 68, T3: 35, touched: false, site: '', eng: '', notes: '', engPref: 'cp', ly: { iso: true, ent: true, vol: false, qual: true } };
+  const S = { fluid: 'R134a', ref: 'IIR', pu: 'barg', Ps: 1, Ts: 0, Pd: 9, Td: 68, T3: 35, touched: false, site: '', eng: '', notes: '', engPref: 'auto', ly: { iso: true, ent: true, vol: false, qual: true } };
   const SKEY = 'mollier-desk-v2';
   try {
     const saved = JSON.parse(localStorage.getItem(SKEY) || '{}');
@@ -1225,8 +1316,7 @@ let MD = (function () {
     if (!MD.DEFS.some(d => d.id === S.fluid)) S.fluid = 'R134a';
     if (!PU[S.pu]) S.pu = 'barg';
     S.ly = Object.assign({ iso: true, ent: true, vol: false, qual: true }, S.ly || {});
-    if (['auto', 'cp', 'bi'].indexOf(S.engPref) < 0) S.engPref = 'cp';
-    if (S.engPref === 'auto') S.engPref = 'cp';
+    if (['auto', 'cp', 'bi'].indexOf(S.engPref) < 0) S.engPref = 'auto';
   } catch (e) { /* storage unavailable */ }
   function save() { try { const o = {}; KEYS.forEach(k => { o[k] = S[k]; }); localStorage.setItem(SKEY, JSON.stringify(o)); } catch (e) { /* ignore */ } }
 
@@ -1362,14 +1452,8 @@ let MD = (function () {
       const v = sel.value, d = MD.DEFS.find(x => x.id === v);
       later(d ? d.name : v, () => { cur.probe = null; cur.sticky = false; S.touched = false; selectFluid(v); syncInputs(); recompute(true); });
     });
-    let readingTimer = 0;
     Object.keys(NUM).forEach(id => {
-      $(id).addEventListener('input', () => {
-        S[NUM[id]] = parseFloat($(id).value); S.touched = true;
-        $('exNote').hidden = true; $('btnExample').hidden = false;
-        if (readingTimer) clearTimeout(readingTimer);
-        readingTimer = setTimeout(() => { readingTimer = 0; recompute(false); }, 100);
-      });
+      $(id).addEventListener('input', () => { S[NUM[id]] = parseFloat($(id).value); S.touched = true; $('exNote').hidden = true; $('btnExample').hidden = false; recompute(false); });
     });
     $('puSel').addEventListener('change', () => {
       const o = PU[S.pu], n = PU[$('puSel').value];
@@ -2055,21 +2139,37 @@ let MD = (function () {
   function updateBadge() {
     const b = $('engBadge'), st = MD.state;
     let t, c;
-    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (st.fluidErr ? 'Properties: built-in model for this fluid (CoolProp: ' + st.fluidErr + ')' : S.engPref === 'bi' ? 'Properties: built-in model (your choice)' : cur.fl && MD.isBlend(cur.fl.id) ? 'Properties: built-in model (CoolProp unavailable for this fluid)' : 'Properties: built-in model for this fluid'); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
+    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (st.fluidErr ? 'Properties: built-in model for this fluid (CoolProp: ' + st.fluidErr + ')' : S.engPref === 'bi' ? 'Properties: built-in model (your choice)' : cur.fl && MD.isBlend(cur.fl.id) ? 'Properties: built-in model (Auto uses it for blends)' : 'Properties: built-in model for this fluid'); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
     else if (st.status === 'loading') { t = 'Properties: built-in model, loading CoolProp\u2026'; c = 'warn'; }
     else if (st.status === 'failed') { t = 'Properties: built-in model (CoolProp failed its self-check)'; c = 'bad'; }
     else { t = 'Properties: built-in model (CoolProp not loaded)'; c = 'warn'; }
     if (st.detail && st.status !== 'coolprop') t += ' \u2014 ' + st.detail;
     b.textContent = t; b.className = 'eng ' + c; b.title = st.detail || '';
     b.hidden = false;
+    updatePrep();
     $('engRow').hidden = st.status !== 'coolprop'; $('engSel').value = S.engPref;
     $('btnDiag').hidden = !(st.status === 'coolprop' && location.hash === '#diag');
+  }
+
+  function updatePrep() {
+    const el = $('prepLine'), p = MD.prep;
+    if (!el) return;
+    if (MD.state.status !== 'coolprop' || p.state === 'idle') { el.hidden = true; return; }
+    el.hidden = false;
+    const sec = (p.ms / 1000).toFixed(1) + ' s';
+    if (p.state === 'running') el.textContent = 'Preparing all refrigerants in the background: ' + p.done + ' of ' + p.total + ' (' + sec + ')';
+    else {
+      const bad = p.failed.length ? ' \u2014 could not prepare ' + p.failed.join(', ') + ' (these use the built-in model)' : '';
+      el.textContent = 'All ' + (p.total - p.failed.length) + ' refrigerants ready in ' + sec + (p.built === 0 ? ' (loaded from this device)' : p.cached ? ' (' + p.cached + ' loaded from this device)' : ' (saved on this device, so next time is quicker)') + bad;
+    }
   }
 
   /* ---------- start ---------- */
   function init() {
     MD.onEngine = () => { cur.probe = null; cur.sticky = false; selectFluid(S.fluid); syncInputs(); recompute(true); updateBadge(); };
     MD.onLines = () => draw();
+    MD.onPrep = () => updatePrep();
+    MD.prefRef = S.ref;
     MD.pref = S.engPref;
     MD.wantFn = () => S.ly;
     $('btnDiag').addEventListener('click', () => {
@@ -2092,6 +2192,7 @@ let MD = (function () {
   init();
 })();
 </script>
+
 
 <script>if ("serviceWorker" in navigator && /^https?:/.test(location.protocol)) window.addEventListener("load", function () { navigator.serviceWorker.register("sw.js").catch(function () {}); });</script>
 </body>
