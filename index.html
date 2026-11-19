@@ -75,7 +75,7 @@ select:focus-visible, input:focus-visible, button:focus-visible, .chip input:foc
 .warnnote { margin: 0; font-size: 12px; color: var(--ink-2); border-left: 3px solid var(--c-vol); padding-left: 8px; }
 .pt { display: grid; gap: 6px; }
 .pt > b { font: 600 13px var(--f-body); }
-.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; }
 .f { display: grid; gap: 3px; min-width: 0; }
 .f > span { font-size: 12px; color: var(--ink-2); }
 .inp { position: relative; display: block; }
@@ -169,7 +169,7 @@ details p { margin: 8px 0 0; max-width: 78ch; }
         <p class="meta" id="fluidMeta"></p>
         <p class="warnnote" id="fluidWarn" hidden></p>
         <p class="eng warn" id="engBadge" hidden></p>
-        <div id="engRow" hidden style="margin-top:8px"><label class="f" for="engSel"><span class="fl">Calculation engine</span><select id="engSel"><option value="auto">Auto: CoolProp for single fluids, built-in for blends</option><option value="cp">CoolProp for everything (blends can be slow)</option><option value="bi">Built-in model for everything</option></select></label></div>
+        <div id="engRow" hidden style="margin-top:8px"><label class="f" for="engSel"><span class="fl">Calculation engine</span><select id="engSel"><option value="cp">CoolProp for every refrigerant (accurate mixture properties)</option><option value="auto">Automatic engine selection</option><option value="bi">Built-in model for everything</option></select></label></div>
         <button type="button" class="btn" id="btnDiag" hidden style="margin-top:8px">Test CoolProp on blends</button>
         <pre id="cpDiag" hidden style="margin:8px 0 0;font:11px/1.45 var(--f-mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)"></pre>
       </div>
@@ -743,7 +743,11 @@ const BI = (function () {
 const CPE = (function (BI) {
   'use strict';
   let API = null;
-  function setAPI(f, ef) { API = f; if (ef !== undefined) errFn = ef; }
+  // CoolProp is expensive. Keep a bounded LRU of exact PropsSI calls so chart
+  // construction, readings and repeated redraws can reuse the same results.
+  const propCache = new Map();
+  const PROP_CACHE_LIMIT = 30000;
+  function setAPI(f, ef) { API = f; propCache.clear(); if (ef !== undefined) errFn = ef; }
   const NAMES = {
     R134a: 'R134a', R1234yf: 'R1234yf', R1234ze: 'R1234ze(E)', R32: 'R32', R125: 'R125', R143a: 'R143a', R152a: 'R152A', R23: 'R23',
     R245fa: 'R245fa', R1233zd: 'R1233zd(E)', R22: 'R22', R600: 'n-Butane', R600a: 'IsoButane', R290: 'Propane', R1270: 'Propylene',
@@ -762,6 +766,11 @@ const CPE = (function (BI) {
   function setErrFn(f) { errFn = f; }
   const short = f => String(f).replace(/HEOS::/, '').replace(/\[(\d\.\d{2})\d*\]/g, '[$1]').slice(0, 40);
   const q = (out, k1, v1, k2, v2, f) => {
+    const key = [out, k1, v1, k2, v2, f].join('|');
+    if (propCache.has(key)) {
+      const hit = propCache.get(key); propCache.delete(key); propCache.set(key, hit);
+      return hit;
+    }
     const r = API(out, k1, v1, k2, v2, f);
     if (typeof r !== 'number' || !isFinite(r) || Math.abs(r) > 1e300) {
       let why = '';
@@ -769,6 +778,8 @@ const CPE = (function (BI) {
       const num = x => typeof x === 'number' ? +x.toPrecision(6) : x;
       throw new Error(out + (k1 ? ' from ' + k1 + '=' + num(v1) + ', ' + k2 + '=' + num(v2) : '') + ' for ' + short(f) + (why ? ': ' + why : ''));
     }
+    propCache.set(key, r);
+    if (propCache.size > PROP_CACHE_LIMIT) propCache.delete(propCache.keys().next().value);
     return r;
   };
   function mixString(id) {
@@ -1043,7 +1054,7 @@ const CPE = (function (BI) {
       for (let qu = next(); qu && Date.now() - t0 < 12; qu = next()) { const job = qu.shift(); try { job(); } catch (e) { /* skip this line */ } did = true; }
       const more = next();
       if (notify && did && (!more || Date.now() - lastNote > 400)) { lastNote = Date.now(); notify(); }
-      if (more) timer = setTimeout(step, 40);
+      if (more) timer = setTimeout(step, 12);
     };
     fl.kick = () => { if (!timer && fl.buildToken === token && next()) timer = setTimeout(step, 0); };
     timer = setTimeout(step, 0);
@@ -1059,8 +1070,8 @@ let MD = (function () {
   const st = { cp: false, status: 'loading', detail: '' };
   const F = { DEFS: BI.DEFS, state: st, onEngine: null, onLines: null };
   const isCP = fl => !!(fl && fl.viaCP);
-  F.pref = 'auto';   /* auto: CoolProp for single fluids, built-in for blends; cp: CoolProp wherever possible; bi: built-in */
-  const useCP = id => st.cp && CPE.supports(id) && (F.pref === 'cp' || (F.pref === 'auto' && !CPE.isBlend(id)));
+  F.pref = 'cp';   /* cp: CoolProp for every supported fluid; bi: built-in model */
+  const useCP = id => st.cp && CPE.supports(id) && F.pref !== 'bi';
   F.get = function (id, ref) {
     if (useCP(id)) { try { st.fluidErr = ''; return CPE.get(id, ref); } catch (e) { st.fluidErr = id + ': ' + (e && e.message ? e.message : String(e)); } }
     return BI.get(id, ref);
@@ -1206,7 +1217,7 @@ let MD = (function () {
     kpag: { l: 'kPa g', d: 0, f: k => k - 101.325, t: v => v + 101.325 }
   };
   const KEYS = ['fluid', 'ref', 'pu', 'Ps', 'Ts', 'Pd', 'Td', 'T3', 'touched', 'ly', 'site', 'eng', 'notes', 'engPref'];
-  const S = { fluid: 'R134a', ref: 'IIR', pu: 'barg', Ps: 1, Ts: 0, Pd: 9, Td: 68, T3: 35, touched: false, site: '', eng: '', notes: '', engPref: 'auto', ly: { iso: true, ent: true, vol: false, qual: true } };
+  const S = { fluid: 'R134a', ref: 'IIR', pu: 'barg', Ps: 1, Ts: 0, Pd: 9, Td: 68, T3: 35, touched: false, site: '', eng: '', notes: '', engPref: 'cp', ly: { iso: true, ent: true, vol: false, qual: true } };
   const SKEY = 'mollier-desk-v2';
   try {
     const saved = JSON.parse(localStorage.getItem(SKEY) || '{}');
@@ -1214,7 +1225,8 @@ let MD = (function () {
     if (!MD.DEFS.some(d => d.id === S.fluid)) S.fluid = 'R134a';
     if (!PU[S.pu]) S.pu = 'barg';
     S.ly = Object.assign({ iso: true, ent: true, vol: false, qual: true }, S.ly || {});
-    if (['auto', 'cp', 'bi'].indexOf(S.engPref) < 0) S.engPref = 'auto';
+    if (['auto', 'cp', 'bi'].indexOf(S.engPref) < 0) S.engPref = 'cp';
+    if (S.engPref === 'auto') S.engPref = 'cp';
   } catch (e) { /* storage unavailable */ }
   function save() { try { const o = {}; KEYS.forEach(k => { o[k] = S[k]; }); localStorage.setItem(SKEY, JSON.stringify(o)); } catch (e) { /* ignore */ } }
 
@@ -1232,6 +1244,12 @@ let MD = (function () {
 
   const MONO = '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
   const SANS = '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif';
+  let colCache = null, colKey = '';
+  function colorsOnce() {
+    let k = ''; try { k = (document.documentElement.getAttribute('data-theme') || '') + (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches); } catch (e) { /* ignore */ }
+    if (!colCache || k !== colKey) { colCache = colors(); colKey = k; }
+    return colCache;
+  }
   function colors() {
     const cs = getComputedStyle(document.documentElement);
     const g = n => (cs.getPropertyValue(n) || '').trim() || '#888';
@@ -1344,8 +1362,14 @@ let MD = (function () {
       const v = sel.value, d = MD.DEFS.find(x => x.id === v);
       later(d ? d.name : v, () => { cur.probe = null; cur.sticky = false; S.touched = false; selectFluid(v); syncInputs(); recompute(true); });
     });
+    let readingTimer = 0;
     Object.keys(NUM).forEach(id => {
-      $(id).addEventListener('input', () => { S[NUM[id]] = parseFloat($(id).value); S.touched = true; $('exNote').hidden = true; $('btnExample').hidden = false; recompute(false); });
+      $(id).addEventListener('input', () => {
+        S[NUM[id]] = parseFloat($(id).value); S.touched = true;
+        $('exNote').hidden = true; $('btnExample').hidden = false;
+        if (readingTimer) clearTimeout(readingTimer);
+        readingTimer = setTimeout(() => { readingTimer = 0; recompute(false); }, 100);
+      });
     });
     $('puSel').addEventListener('change', () => {
       const o = PU[S.pu], n = PU[$('puSel').value];
@@ -1527,17 +1551,18 @@ let MD = (function () {
   function draw(o) {
     const fl = cur.fl, cv = o ? o.cv : $('cv');
     if (!fl || !view) return;
-    const dpr = o ? o.dpr : (window.devicePixelRatio || 1), W = o ? o.W : cv.clientWidth, H = o ? o.H : cv.clientHeight;
+    const dpr = o ? o.dpr : Math.min(window.devicePixelRatio || 1, 2), W = o ? o.W : cv.clientWidth, H = o ? o.H : cv.clientHeight;
     if (!W || !H) return;
     if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
     const ctx = cv.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const C = o ? o.C : colors();
+    const C = o ? o.C : colorsOnce();
     ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
     const m = { l: W < 520 ? 42 : 52, r: 10, t: 10, b: 36 };
     const pw = W - m.l - m.r, ph = H - m.t - m.b;
     const fx = h => m.l + (h - view.h0) / (view.h1 - view.h0) * pw;
     const fy = P => m.t + (view.lp1 - Math.log(P)) / (view.lp1 - view.lp0) * ph;
+    if (!o) drawnView = Object.assign({}, view);
     geo = { m, pw, ph, W, H, fx, fy, inv: { h: x => view.h0 + (x - m.l) / pw * (view.h1 - view.h0), P: y => Math.exp(view.lp1 - (y - m.t) / ph * (view.lp1 - view.lp0)) } };
     ctx.textBaseline = 'middle'; ctx.font = '400 11px ' + MONO;
 
@@ -1682,6 +1707,38 @@ let MD = (function () {
   }
   function schedule() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); }
 
+  /* While panning or zooming, move a snapshot of the last full picture instead of redrawing every line; redraw properly once the gesture settles. */
+  let snap = null, gTimer = 0, gRaf = 0;
+  function gesture() {
+    if (!snap && geo) {
+      const cv = $('cv');
+      try {
+        const sc = document.createElement('canvas'); sc.width = cv.width; sc.height = cv.height;
+        sc.getContext('2d').drawImage(cv, 0, 0);
+        snap = { cv: sc, v: Object.assign({}, drawnView || view), geo, dpr: cv.width / cv.clientWidth };
+      } catch (e) { snap = null; }
+    }
+    if (!snap) { schedule(); return; }
+    if (!gRaf) gRaf = requestAnimationFrame(() => { gRaf = 0; drawSnap(); });
+    clearTimeout(gTimer);
+    gTimer = setTimeout(() => { snap = null; draw(); }, 160);
+  }
+  function drawSnap() {
+    if (!snap) return;
+    const cv = $('cv'), ctx = cv.getContext('2d'), g = snap.geo, sv = snap.v, d = snap.dpr, m = g.m;
+    const kx = (sv.h1 - sv.h0) / (view.h1 - view.h0), ky = (sv.lp1 - sv.lp0) / (view.lp1 - view.lp0);
+    const tx = (sv.h0 - view.h0) / (view.h1 - view.h0) * g.pw, ty = (view.lp1 - sv.lp1) / (view.lp1 - view.lp0) * g.ph;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = colorsOnce().bg; ctx.fillRect(m.l * d, m.t * d, g.pw * d, g.ph * d);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(m.l * d, m.t * d, g.pw * d, g.ph * d); ctx.clip();
+    ctx.setTransform(d * kx, 0, 0, d * ky, d * (m.l * (1 - kx) + tx), d * (m.t * (1 - ky) + ty));
+    ctx.drawImage(snap.cv, 0, 0, g.W, g.H);
+    ctx.restore();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  let drawnView = null;
+
   /* ---------- pointer interaction ---------- */
   function bindPointer() {
     const cv = $('cv'), ptrs = new Map();
@@ -1724,13 +1781,13 @@ let MD = (function () {
       if (g.mode === 'wait' && Math.abs(p.x - g.x) + Math.abs(p.y - g.y) > TOL) { clearTimeout(timer); g.mode = 'pan'; }
       if (g.mode === 'pan') {
         const dh = -(p.x - g.x) / geo.pw * sh, dl = (p.y - g.y) / geo.ph * sl;
-        view = clampView({ h0: g.v0.h0 + dh, h1: g.v0.h1 + dh, lp0: g.v0.lp0 + dl, lp1: g.v0.lp1 + dl }); schedule();
+        view = clampView({ h0: g.v0.h0 + dh, h1: g.v0.h1 + dh, lp0: g.v0.lp0 + dl, lp1: g.v0.lp1 + dl }); gesture();
       } else if (g.mode === 'zoom' && ptrs.size === 2) {
         const a = Array.from(ptrs.values());
         const d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1, f = g.d0 / d, mx = (a[0].x + a[1].x) / 2, my = (a[0].y + a[1].y) / 2;
         const ah = g.v0.h0 + (g.mx - geo.m.l) / geo.pw * sh, al = g.v0.lp1 - (g.my - geo.m.t) / geo.ph * sl;
         const nh = sh * f, nl = sl * f, h0 = ah - (mx - geo.m.l) / geo.pw * nh, lp1 = al + (my - geo.m.t) / geo.ph * nl;
-        view = clampView({ h0, h1: h0 + nh, lp0: lp1 - nl, lp1 }); schedule();
+        view = clampView({ h0, h1: h0 + nh, lp0: lp1 - nl, lp1 }); gesture();
       }
     });
     const end = e => {
@@ -1753,7 +1810,7 @@ let MD = (function () {
       if (p.x < geo.m.l || p.x > geo.m.l + geo.pw || p.y < geo.m.t || p.y > geo.m.t + geo.ph) return;
       const f = Math.exp(e.deltaY * 0.0015), ah = geo.inv.h(p.x), al = Math.log(geo.inv.P(p.y)), fh = (p.x - geo.m.l) / geo.pw, fl2 = (p.y - geo.m.t) / geo.ph;
       const nh = (view.h1 - view.h0) * f, nl = (view.lp1 - view.lp0) * f;
-      view = clampView({ h0: ah - fh * nh, h1: ah - fh * nh + nh, lp1: al + fl2 * nl, lp0: al + fl2 * nl - nl }); schedule();
+      view = clampView({ h0: ah - fh * nh, h1: ah - fh * nh + nh, lp1: al + fl2 * nl, lp0: al + fl2 * nl - nl }); gesture();
     }, { passive: false });
     cv.addEventListener('dblclick', () => { fitView(); schedule(); });
   }
@@ -1998,7 +2055,7 @@ let MD = (function () {
   function updateBadge() {
     const b = $('engBadge'), st = MD.state;
     let t, c;
-    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (st.fluidErr ? 'Properties: built-in model for this fluid (CoolProp: ' + st.fluidErr + ')' : S.engPref === 'bi' ? 'Properties: built-in model (your choice)' : cur.fl && MD.isBlend(cur.fl.id) ? 'Properties: built-in model (Auto uses it for blends)' : 'Properties: built-in model for this fluid'); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
+    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (st.fluidErr ? 'Properties: built-in model for this fluid (CoolProp: ' + st.fluidErr + ')' : S.engPref === 'bi' ? 'Properties: built-in model (your choice)' : cur.fl && MD.isBlend(cur.fl.id) ? 'Properties: built-in model (CoolProp unavailable for this fluid)' : 'Properties: built-in model for this fluid'); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
     else if (st.status === 'loading') { t = 'Properties: built-in model, loading CoolProp\u2026'; c = 'warn'; }
     else if (st.status === 'failed') { t = 'Properties: built-in model (CoolProp failed its self-check)'; c = 'bad'; }
     else { t = 'Properties: built-in model (CoolProp not loaded)'; c = 'warn'; }
