@@ -1057,10 +1057,10 @@ const CPE = (function (BI) {
     const grid = [], sats = [];
     const Q = { prep: [], iso: [], ent: [], vol: [] };
     const H = (T, P) => q('H', 'T', T, 'P', P * 1000, f) / 1000 + fl.hOff;
-    Q.prep.push(() => { for (let i = 0; i < N; i++) { const P = V.Pmin * Math.pow(V.Pmax / V.Pmin, i / (N - 1)); grid.push(P); let s = null; try { s = sat(fl, P); } catch (e) { s = null; } sats.push(s); } });
+    Q.prep.push(function* () { for (let i = 0; i < N; i++) { yield; const P = V.Pmin * Math.pow(V.Pmax / V.Pmin, i / (N - 1)); grid.push(P); let s = null; try { s = sat(fl, P); } catch (e) { s = null; } sats.push(s); } });
     const Tlo = Math.ceil((fl.tmin - 273.15) / 10) * 10, Thi = Math.floor((fl.Tc - 273.15 + 70) / 10) * 10;
     for (let tc = Tlo; tc <= Thi; tc += 10) {
-      Q.iso.push(() => {
+      Q.iso.push(function* () {
         const T = tc + 273.15, pts = [];
         const put = (h, P) => pts.push([h, P]);
         const one = i => { try { put(H(T, grid[i]), grid[i]); } catch (e) { /* skip */ } };
@@ -1068,12 +1068,12 @@ const CPE = (function (BI) {
           let Pd = 0, Pb = 0;
           try { Pd = q('P', 'T', T, 'Q', 1, f) / 1000; Pb = q('P', 'T', T, 'Q', 0, f) / 1000; } catch (e) { return; }
           if (Pd > V.Pmin) {
-            for (let i = 0; i < N && grid[i] < Pd * 0.999; i++) one(i);
+            for (let i = 0; i < N && grid[i] < Pd * 0.999; i++) { yield; one(i); }
             put(q('H', 'P', Pd * 1000, 'Q', 1, f) / 1000 + fl.hOff, Pd);
             put(q('H', 'P', Pb * 1000, 'Q', 0, f) / 1000 + fl.hOff, Pb);
-            for (let i = 0; i < N; i++) if (grid[i] > Pb * 1.001) one(i);
-          } else for (let i = 0; i < N; i++) one(i);
-        } else for (let i = 0; i < N; i++) one(i);
+            for (let i = 0; i < N; i++) if (grid[i] > Pb * 1.001) { yield; one(i); }
+          } else for (let i = 0; i < N; i++) { yield; one(i); }
+        } else for (let i = 0; i < N; i++) { yield; one(i); }
         if (pts.length > 1) L.iso.push({ val: tc, pts, nv: 0 });
       });
     }
@@ -1082,9 +1082,10 @@ const CPE = (function (BI) {
     const sMin = t.sf[0], sStep = nice(sMax - sMin, mix ? 14 : 22, [0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1]);
     for (let s = Math.ceil(sMin / sStep) * sStep; s <= sMax; s += sStep) {
       const sv = Math.round(s / sStep) * sStep;
-      Q.ent.push(() => {
+      Q.ent.push(function* () {
         const segs = []; let cur = [];
         for (let i = 0; i < N; i++) {
+          yield;
           const sa = sats[i];
           if (sa && sv < sa.sf) { if (cur.length) { segs.push(cur); cur = []; } continue; }
           try { cur.push([stateAt(fl, grid[i], 's', sv, sa).h, grid[i]]); } catch (e) { if (cur.length) { segs.push(cur); cur = []; } }
@@ -1097,9 +1098,10 @@ const CPE = (function (BI) {
     try { vMin = 1 / q('D', 'T', fl.Tc, 'P', fl.Pc * 1000 * 1.0001, f) * 1.05; } catch (e) { /* default */ }
     const vMax = t.vg[0], vals = [];
     for (let e = -5; e <= 1; e++) for (const m of [1, 2, 3, 5, 7]) { const v = m * Math.pow(10, e); if (v >= vMin && v <= vMax) vals.push(v); }
-    vals.forEach(v => Q.vol.push(() => {
+    vals.forEach(v => Q.vol.push(function* () {
       const segs = []; let cur = [];
       for (let i = 0; i < N; i++) {
+        yield;
         const P = grid[i], sa = sats[i];
         try {
           if (sa) {
@@ -1114,7 +1116,8 @@ const CPE = (function (BI) {
     }));
     /* Work is done in short slices with gaps, only for the layers switched on, and it backs off while the page is being scrolled. */
     const token = (fl.buildToken = {});
-    let timer = 0, lastNote = 0, lastTouch = 0;
+    let timer = 0, lastNote = 0, lastTouch = 0, curGen = null;
+    const SL = mix ? 8 : 12, GAP = mix ? 70 : 40;
     const touch = () => { lastTouch = Date.now(); };
     ['scroll', 'touchmove', 'wheel'].forEach(ev => window.addEventListener(ev, touch, { passive: true, capture: true }));
     const want = () => { try { return wantFn ? wantFn() : { iso: true, ent: true, vol: true }; } catch (e) { return { iso: true, ent: true, vol: true }; } };
@@ -1129,12 +1132,15 @@ const CPE = (function (BI) {
       if (fl.buildToken !== token) { ['scroll', 'touchmove', 'wheel'].forEach(ev => window.removeEventListener(ev, touch, { capture: true })); return; }
       if (Date.now() - lastTouch < 350) { timer = setTimeout(step, 120); return; }
       const t0 = Date.now(); let did = false;
-      for (let qu = next(); qu && Date.now() - t0 < 12; qu = next()) { const job = qu.shift(); try { job(); } catch (e) { /* skip this line */ } did = true; }
-      const more = next();
+      while (Date.now() - t0 < SL) {
+        if (!curGen) { const qu = next(); if (!qu) break; try { curGen = qu.shift()(); } catch (e) { curGen = null; } did = true; if (!curGen) continue; }
+        try { if (curGen.next().done) { curGen = null; did = true; } } catch (e) { curGen = null; did = true; }   /* a failed line is skipped */
+      }
+      const more = curGen || next();
       if (notify && did && (!more || Date.now() - lastNote > 400)) { lastNote = Date.now(); notify(); }
-      if (more) timer = setTimeout(step, 40);
+      if (more) timer = setTimeout(step, GAP);
     };
-    fl.kick = () => { if (!timer && fl.buildToken === token && next()) timer = setTimeout(step, 0); };
+    fl.kick = () => { if (!timer && fl.buildToken === token && (curGen || next())) timer = setTimeout(step, 0); };
     timer = setTimeout(step, 0);
     return L;
   }
