@@ -174,7 +174,7 @@ details p { margin: 8px 0 0; max-width: 78ch; }
         <p class="warnnote" id="fluidWarn" hidden></p>
         <p class="eng warn" id="engBadge" hidden></p>
         <p class="meta" id="prepLine" hidden style="margin-top:2px"></p>
-        <div id="engRow" hidden style="margin-top:6px"><label class="f" for="engSel"><span class="fl">Calculation engine</span><select id="engSel"><option value="auto">CoolProp (recommended)</option><option value="bi">Built-in model</option></select></label></div>
+        <div id="engRow" hidden style="margin-top:6px"><label class="f" for="engSel"><span class="fl">Calculation engine</span><select id="engSel"><option value="auto">CoolProp, live</option><option value="bi">CoolProp tables (built in, instant)</option></select></label></div>
         <button type="button" class="btn" id="btnDiag" hidden style="margin-top:8px">Test CoolProp on blends</button>
         <pre id="cpDiag" hidden style="margin:8px 0 0;font:11px/1.45 var(--f-mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)"></pre>
       </div>
@@ -214,6 +214,15 @@ details p { margin: 8px 0 0; max-width: 78ch; }
         <h2>PDF report</h2>
         <label class="f" for="inpSite"><span>Site or job</span><input id="inpSite" type="text" autocomplete="off"></label>
         <label class="f" for="inpEng"><span>Engineer</span><input id="inpEng" type="text" autocomplete="off"></label>
+        <div class="pair">
+          <label class="f" for="inpMake"><span>Make</span><input id="inpMake" type="text" autocomplete="off"></label>
+          <label class="f" for="inpModel"><span>Model</span><input id="inpModel" type="text" autocomplete="off"></label>
+        </div>
+        <div class="pair">
+          <label class="f" for="inpSerial"><span>Serial number</span><input id="inpSerial" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
+          <label class="f" for="inpCharge"><span>Refrigerant charge</span><span class="inp"><input id="inpCharge" type="text" inputmode="decimal" autocomplete="off"><em>kg</em></span></label>
+        </div>
+        <label class="f" for="inpLoc"><span>Location</span><input id="inpLoc" type="text" autocomplete="off" placeholder="e.g. roof plant room, cold store 2"></label>
         <label class="f" for="inpNotes"><span>Notes for the report</span><textarea id="inpNotes" rows="3" style="font: 400 16px var(--f-body); resize: vertical"></textarea></label>
         <button type="button" class="btn primary" id="btnPdf">Create PDF report</button>
         <p class="meta" id="pdfMsg" role="status"></p>
@@ -1738,7 +1747,7 @@ let MD = (function () {
     kpaa: { l: 'kPa a', d: 0, f: k => k, t: v => v },
     kpag: { l: 'kPa g', d: 0, f: k => k - 101.325, t: v => v + 101.325 }
   };
-  const KEYS = ['fluid', 'ref', 'pu', 'Ps', 'Ts', 'Pd', 'Td', 'T3', 'touched', 'ly', 'site', 'eng', 'notes', 'engPref'];
+  const KEYS = ['fluid', 'ref', 'pu', 'Ps', 'Ts', 'Pd', 'Td', 'T3', 'touched', 'ly', 'site', 'eng', 'notes', 'engPref', 'make', 'model', 'serial', 'charge', 'loc'];
   const S = { fluid: 'R134a', ref: 'IIR', pu: 'barg', Ps: 1, Ts: 0, Pd: 9, Td: 68, T3: 35, touched: false, site: '', eng: '', notes: '', engPref: 'auto', ly: { iso: true, ent: true, vol: false, qual: true } };
   const SKEY = 'mollier-desk-v2';
   try {
@@ -1864,6 +1873,7 @@ let MD = (function () {
     $('lyIso').checked = S.ly.iso; $('lyEnt').checked = S.ly.ent; $('lyVol').checked = S.ly.vol; $('lyQual').checked = S.ly.qual;
     $('exNote').hidden = S.touched; $('btnExample').hidden = !S.touched;
     $('inpSite').value = S.site || ''; $('inpEng').value = S.eng || ''; $('inpNotes').value = S.notes || '';
+    [['inpMake', 'make'], ['inpModel', 'model'], ['inpSerial', 'serial'], ['inpCharge', 'charge'], ['inpLoc', 'loc']].forEach(([id, k]) => { $(id).value = S[k] || ''; });
   }
   function bindInputs() {
     const sel = $('fluidSel');
@@ -2005,6 +2015,7 @@ let MD = (function () {
     const c = cur.cyc; if (!c) return;
     const pl = PU[S.pu].l;
     const t = [
+      ...(S.make || S.model || S.serial || S.charge || S.loc ? ['Equipment: ' + [S.make, S.model, S.serial ? 'serial ' + S.serial : '', S.charge ? 'charge ' + S.charge + (/[a-z]/i.test(S.charge) ? '' : ' kg') : '', S.loc].filter(Boolean).join(', ')] : []),
       cur.fl.name + ' readings: suction ' + S.Ps + ' ' + pl + ', ' + S.Ts + ' \u00B0C; discharge ' + S.Pd + ' ' + pl + ', ' + S.Td + ' \u00B0C; liquid line ' + S.T3 + ' \u00B0C',
       'Superheat ' + num(c.sh, 1) + ' K, subcooling ' + (c.sc === null ? 'n/a' : num(c.sc, 1) + ' K'),
       'Evaporating ' + num(C2(c.Tevap), 1) + ' \u00B0C, condensing ' + (c.Tcond === null ? 'n/a' : num(C2(c.Tcond), 1) + ' \u00B0C'),
@@ -2507,6 +2518,17 @@ let MD = (function () {
       dx += dw[i];
     });
     y += 38;
+    /* the equipment being worked on */
+    const chg = String(S.charge || '').trim();
+    const det2 = [['Make', S.make || '\u2014'], ['Model', S.model || '\u2014'], ['Serial no.', S.serial || '\u2014'], ['Charge', chg ? chg + (/[a-z]/i.test(chg) ? '' : ' kg') : '\u2014'], ['Location', S.loc || '\u2014']];
+    const dw2 = [105, 115, 110, 70, 115];
+    dx = L;
+    det2.forEach((p, i) => {
+      d.text(p[0].toUpperCase(), dx, y, { size: 7.5, bold: true, color: '#75848F' });
+      d.text(fit(p[1], dw2[i] - 10, 10.5, true), dx, y + 14, { size: 10.5, bold: true });
+      dx += dw2[i];
+    });
+    y += 36;
     const fnote = fl.note + (gl ? '. Glide about ' + fl.glide + ' K, so superheat uses the dew point and subcooling the bubble point.' : '');
     wrap(fnote, CW, 8.5).slice(0, 2).forEach(l => { d.text(l, L, y, { size: 8.5, color: '#455662' }); y += 11.5; });
     y += 12;
@@ -2655,7 +2677,8 @@ let MD = (function () {
   const isStandalone = () => { try { return !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)); } catch (e) { return false; } };
   function initPdf() {
     ['btnPdf', 'btnPdf2'].forEach(id => $(id).addEventListener('click', makeReport));
-    ['inpSite', 'inpEng', 'inpNotes'].forEach(id => $(id).addEventListener('input', () => { S[{ inpSite: 'site', inpEng: 'eng', inpNotes: 'notes' }[id]] = $(id).value; save(); }));
+    const TXT = { inpSite: 'site', inpEng: 'eng', inpNotes: 'notes', inpMake: 'make', inpModel: 'model', inpSerial: 'serial', inpCharge: 'charge', inpLoc: 'loc' };
+    Object.keys(TXT).forEach(id => $(id).addEventListener('input', () => { S[TXT[id]] = $(id).value; save(); }));
     try {
       if (window.claude && window.claude.use) window.claude.use('downloads').then(x => { dl = x; $('pdfGrp').hidden = !x; $('btnPdf2').hidden = !x; }, () => { /* unavailable */ });
     } catch (e) { /* unavailable */ }
@@ -2690,10 +2713,10 @@ let MD = (function () {
   function updateBadge() {
     const b = $('engBadge'), st = MD.state;
     let t, c;
-    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp' : (st.fluidErr ? 'Properties: built-in model for this fluid (CoolProp: ' + st.fluidErr + ')' : S.engPref === 'bi' ? 'Properties: built-in model (your choice)' : st.waiting && cur.fl && st.waiting === cur.fl.id ? 'Properties: built-in model for now, CoolProp is still preparing ' + cur.fl.id + '\u2026' : 'Properties: built-in model for this fluid'); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
-    else if (st.status === 'loading') { t = 'Properties: built-in model, loading CoolProp\u2026'; c = 'warn'; }
-    else if (st.status === 'failed') { t = 'Properties: built-in model (CoolProp failed its self-check)'; c = 'bad'; }
-    else { t = 'Properties: built-in model (CoolProp not loaded)'; c = 'warn'; }
+    if (st.status === 'coolprop') { t = cur.fl && cur.fl.viaCP ? 'Properties: CoolProp, live' : (st.fluidErr ? 'Properties: CoolProp tables (built in) for this fluid (live CoolProp: ' + st.fluidErr + ')' : S.engPref === 'bi' ? 'Properties: CoolProp tables (built in)' : st.waiting && cur.fl && st.waiting === cur.fl.id ? 'Properties: CoolProp tables (built in) for now, live CoolProp is still preparing ' + cur.fl.id + '\u2026' : 'Properties: CoolProp tables (built in) for this fluid'); c = cur.fl && cur.fl.viaCP ? 'ok' : 'warn'; }
+    else if (st.status === 'loading') { t = 'Properties: CoolProp tables (built in), loading live CoolProp\u2026'; c = 'warn'; }
+    else if (st.status === 'failed') { t = 'Properties: CoolProp tables (built in); live CoolProp failed its self-check'; c = 'bad'; }
+    else { t = 'Properties: CoolProp tables (built in); live CoolProp not loaded'; c = 'warn'; }
     if (st.detail && st.status !== 'coolprop') t += ' \u2014 ' + st.detail;
     b.textContent = t; b.className = 'eng ' + c; b.title = st.detail || '';
     b.hidden = false;
