@@ -60,7 +60,7 @@ select:focus-visible, input:focus-visible, button:focus-visible, .chip input:foc
 
 .grid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); grid-template-areas: "controls" "kpi" "chart" "tables"; }
 @media (min-width: 1000px) {
-  .grid { grid-template-columns: 340px minmax(0, 1fr); grid-template-areas: "controls kpi" "controls chart" "controls tables"; align-items: start; }
+  .grid { grid-template-columns: 340px minmax(0, 1fr); grid-template-areas: "controls kpi" "controls chart" "controls tables" "controls ."; grid-template-rows: auto auto auto 1fr; align-items: start; }   /* spare height goes below the tables, not between them */
 }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
 
@@ -88,13 +88,15 @@ select:focus-visible, input:focus-visible, button:focus-visible, .chip input:foc
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
 .btn.primary:hover { filter: brightness(1.06); }
 
-.kpis { grid-area: kpi; display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.kpis { grid-area: kpi; display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }
+.kmain { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.ksmall { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
 .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 2px; align-content: start; min-width: 0; }
 .kpi-l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-2); }
 .kpi-v { font: 600 22px/1.15 var(--f-mono); font-variant-numeric: tabular-nums; }
 .kpi-v small { font: 500 12px var(--f-mono); color: var(--ink-2); margin-left: 4px; }
 .kpi-sub { font-size: 12px; color: var(--ink-2); }
-.kpi-main { grid-column: span 2; gap: 3px; border-width: 2px; }
+.kpi-main { gap: 3px; border-width: 2px; }
 .kpi-main .kpi-v { font-size: 38px; }
 .k-sh { border-color: var(--c-sh); } .k-sh .kpi-v { color: var(--c-sh); }
 .k-sc { border-color: var(--c-sc); } .k-sc .kpi-v { color: var(--c-sc); }
@@ -102,7 +104,6 @@ select:focus-visible, input:focus-visible, button:focus-visible, .chip input:foc
 .updbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; border: 0; background: var(--ink); color: var(--bg); font: 600 15px var(--f-body); padding: 14px max(16px, env(safe-area-inset-right, 0px)) calc(14px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); cursor: pointer; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 .k-cop { border-color: var(--accent); } .k-cop .kpi-v { color: var(--accent); }
-@media (min-width: 760px) { .kpi-main { grid-column: span 2; } }
 .msg { grid-column: 1 / -1; margin: 0; padding: 9px 12px; border: 1px solid var(--warn); border-radius: 6px; color: var(--warn); background: var(--panel); font-weight: 500; }
 
 .chartcard { grid-area: chart; padding: 10px; display: grid; gap: 10px; }
@@ -2012,21 +2013,22 @@ let MD = (function () {
     const c = cur.cyc, el = $('kpi');
     try { $('sr').textContent = c ? 'Superheat ' + num(c.sh, 1) + ' K, subcooling ' + (c.sc === null ? 'not applicable' : num(c.sc, 1) + ' K') + ', COP ' + num(c.cop, 2) + (c.etaBad ? '. Warning: isentropic efficiency over 100 percent.' : '') : ''; } catch (e) { /* ignore */ }
     if (!c) {
-      el.innerHTML = kpi('Superheat', '\u2014', '', 'kpi-main k-sh') + kpi('Subcooling', '\u2014', '', 'kpi-main k-sc') + kpi('COP (cooling)', '\u2014', '', 'kpi-main k-cop');
+      el.innerHTML = '<div class="kmain">' + kpi('Superheat', '\u2014', '', 'kpi-main k-sh') + kpi('Subcooling', '\u2014', '', 'kpi-main k-sc') + kpi('COP (cooling)', '\u2014', '', 'kpi-main k-cop') + '</div>';
       return;
     }
     const scTxt = c.sc === null ? '\u2014' : num(c.sc, 1), gl = c.glide >= 1;
-    el.innerHTML =
+    /* two rows: the three main results, then the supporting figures */
+    el.innerHTML = '<div class="kmain">' +
       kpi('Superheat', num(c.sh, 1), 'K', 'kpi-main k-sh', 'Suction ' + num(S.Ts, 1) + ' \u00B0C, ' + (gl ? 'dew point ' : 'saturated ') + num(C2(c.Tevap), 1) + ' \u00B0C') +
       kpi('Subcooling', scTxt, c.sc === null ? '' : 'K', 'kpi-main k-sc', c.sc === null ? 'Above the critical pressure, no saturation' : 'Liquid line ' + num(S.T3, 1) + ' \u00B0C, ' + (gl ? 'bubble point ' : 'saturated ') + num(C2(c.Tbub), 1) + ' \u00B0C') +
-      kpi('COP (cooling)', num(c.cop, 2), '', 'kpi-main k-cop', 'Heating COP ' + num(c.copH, 2) + (c.note ? '. ' + c.note : '') + (c.etaBad ? '. Likely overstated, see isentropic efficiency' : '')) +
+      kpi('COP (cooling)', num(c.cop, 2), '', 'kpi-main k-cop', 'Heating COP ' + num(c.copH, 2) + (c.note ? '. ' + c.note : '') + (c.etaBad ? '. Likely overstated, see isentropic efficiency' : '')) + '</div><div class="ksmall">' +
       kpi(gl ? 'Evaporating (dew)' : 'Evaporating (sat.)', num(C2(c.Tevap), 1), '\u00B0C') +
       kpi(gl ? 'Condensing (dew)' : 'Condensing (sat.)', c.Tcond === null ? '\u2014' : num(C2(c.Tcond), 1), c.Tcond === null ? '' : '\u00B0C') +
       kpi('Discharge above sat.', c.dsh === null ? '\u2014' : num(c.dsh, 1), c.dsh === null ? '' : 'K') +
       kpi('Pressure ratio', num(c.pr, 2)) +
       kpi('Isentropic efficiency', num(c.eta * 100, 1), '%', c.etaBad ? 'k-bad' : '', c.etaBad ? 'Over 100 %: check the discharge reading' : '') +
       kpi('Cooling effect', num(c.qe, 1), 'kJ/kg') +
-      kpi('Compressor work', num(c.w, 1), 'kJ/kg');
+      kpi('Compressor work', num(c.w, 1), 'kJ/kg') + '</div>';
   }
   function renderTable() {
     const tb = $('tbody');
