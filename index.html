@@ -842,9 +842,11 @@ const BI = (function () {
       const segs = []; let cur = [];
       for (let i = 0; i < N; i++) {
         const sat = sats[i];
-        /* all the way through: subcooled liquid, two-phase, vapour and above the critical pressure, so no line stops short */
+        /* two-phase and vapour only: none in the subcooled liquid, nor in the liquid-like region above the
+           critical pressure (colder than the critical temperature), so the liquid side stays uncluttered */
+        if (sat && sv < sat.sf) { if (cur.length) { segs.push(cur); cur = []; } continue; }
         let r = null; try { r = stateAt(fl, grid[i], 's', sv, false, sat); } catch (e) { r = null; }
-        if (r && isFinite(r.h)) cur.push([r.h, grid[i]]); else if (cur.length) { segs.push(cur); cur = []; }
+        if (r && isFinite(r.h) && (sat || r.T >= fl.Tc)) cur.push([r.h, grid[i]]); else if (cur.length) { segs.push(cur); cur = []; }
       }
       if (cur.length) segs.push(cur);
       if (segs.length) L.ent.push({ val: sv, segs, step: sStep });
