@@ -661,6 +661,8 @@ const BI = (function () {
     return 0.5 * (lo + hi);
   }
   const TLO = 110, THI = 820;
+  /* above the critical pressure: liquid-like below the critical temperature, gas-like above (picks the matching CoolProp correction) */
+  const scRoot = (fl, T) => (T < fl.Tc ? 'L' : 'V');
 
   /* generic inversion: key 'h'|'s'|'v'; returns {phase,T,x,h,s,v,P} */
   function stateAt(fl, P, key, val, exact, sat) {
@@ -679,8 +681,8 @@ const BI = (function () {
       const T = bisect(t => props(fl, t, P, 'V')[key] >= val, sat.Td !== undefined ? sat.Td : sat.T, THI);
       const r = props(fl, T, P, 'V'); r.phase = 'vap'; return r;
     }
-    const T = bisect(t => props(fl, t, P, 'V')[key] >= val, TLO, THI);
-    const r = props(fl, T, P, 'V'); r.phase = 'sc'; return r;
+    const T = bisect(t => props(fl, t, P, scRoot(fl, t))[key] >= val, TLO, THI);
+    const r = props(fl, T, P, scRoot(fl, T)); r.phase = 'sc'; return r;
   }
   const stateAtPH = (fl, P, h, exact, sat) => stateAt(fl, P, 'h', h, exact, sat);
   const stateAtPS = (fl, P, s, exact, sat) => stateAt(fl, P, 's', s, exact, sat);
@@ -691,7 +693,7 @@ const BI = (function () {
       const r = props(fl, T, P, T < ts ? 'L' : 'V');
       r.phase = T < ts ? 'liq' : 'vap'; return r;
     }
-    const r = props(fl, T, P, 'V'); r.phase = 'sc'; return r;
+    const r = props(fl, T, P, scRoot(fl, T)); r.phase = 'sc'; return r;
   }
 
   /* ---------- cycle ---------- */
@@ -840,9 +842,9 @@ const BI = (function () {
       const segs = []; let cur = [];
       for (let i = 0; i < N; i++) {
         const sat = sats[i];
-        if (sat && sv < sat.sf) { if (cur.length) { segs.push(cur); cur = []; } continue; }
-        const r = stateAt(fl, grid[i], 's', sv, false, sat);
-        cur.push([r.h, grid[i]]);
+        /* all the way through: subcooled liquid, two-phase, vapour and above the critical pressure, so no line stops short */
+        let r = null; try { r = stateAt(fl, grid[i], 's', sv, false, sat); } catch (e) { r = null; }
+        if (r && isFinite(r.h)) cur.push([r.h, grid[i]]); else if (cur.length) { segs.push(cur); cur = []; }
       }
       if (cur.length) segs.push(cur);
       if (segs.length) L.ent.push({ val: sv, segs, step: sStep });
@@ -863,9 +865,9 @@ const BI = (function () {
           const T = bisect(tt => props(fl, tt, P, 'V').v >= v, sat.T, THI);
           cur.push([props(fl, T, P, 'V').h, P]);
         } else {
-          if (props(fl, TLO, P, 'V').v > v) { if (cur.length) { segs.push(cur); cur = []; } continue; }
-          const T = bisect(tt => props(fl, tt, P, 'V').v >= v, TLO, THI);
-          cur.push([props(fl, T, P, 'V').h, P]);
+          if (props(fl, TLO, P, 'L').v > v) { if (cur.length) { segs.push(cur); cur = []; } continue; }
+          const T = bisect(tt => props(fl, tt, P, scRoot(fl, tt)).v >= v, TLO, THI);
+          cur.push([props(fl, T, P, scRoot(fl, T)).h, P]);
         }
       }
       if (cur.length) segs.push(cur);
